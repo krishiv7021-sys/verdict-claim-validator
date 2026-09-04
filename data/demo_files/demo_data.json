@@ -1,0 +1,8 @@
+{
+  "regulation": "CRD-2026",
+  "filing_rules": {
+    "mandatory_deadline_days": 30,
+    "late_submission_penalty": 15000,
+    "small_enterprise_turnover_threshold": 2500000
+  }
+}

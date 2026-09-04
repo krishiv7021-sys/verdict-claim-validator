@@ -1,0 +1,68 @@
+{
+  "dataset_name": "VERDICT Benchmark 50-Claim Evaluation Suite",
+  "version": "1.0",
+  "source_document": "CRD_Compliance_Directive_2026.txt",
+  "source_content": "SECTION 1: FILING REQUIREMENTS & TIMELINES\n1.1 Mandatory Deadline: All regulated entities must complete and submit their annual compliance disclosures within 30 days following the conclusion of the fiscal year.\n1.2 Electronic Submission: All annual filings must be transmitted exclusively through the secure electronic regulatory gateway (EDGAR-Plus). Physical paper submissions are prohibited.\n1.3 Executive Attestation: The Chief Executive Officer and Chief Compliance Officer must jointly sign the digital attestation certificate.\n\nSECTION 2: PENALTIES & ENFORCEMENT\n2.1 Late Filing Penalties: Any entity failing to meet the 30-day submission deadline is subject to a statutory base civil penalty of $15,000 per violation, plus $500 for each subsequent day of delay.\n2.2 Willful Misrepresentation: Knowingly submitting falsified compliance records constitutes a Class B regulatory felony subject to license suspension.\n\nSECTION 3: EXEMPTIONS & SPECIAL PROVISIONS\n3.1 Small Enterprise Exemption: Commercial enterprises with an aggregate gross annual revenue of less than $2.5 million are explicitly exempt from mandatory quarterly third-party audit verifications.\n3.2 Extension Requests: A single 14-day hardship extension may be granted upon formal written notice submitted at least 5 business days prior to the statutory deadline.",
+  "test_cases": [
+    {
+      "claim_id": "TC001",
+      "claim": "Regulated entities must submit annual compliance disclosures within 30 days after fiscal year end.",
+      "ground_truth_verdict": "SUPPORTED",
+      "expected_evidence_keywords": ["30 days", "annual compliance disclosures"]
+    },
+    {
+      "claim_id": "TC002",
+      "claim": "All annual filings must be submitted electronically through the EDGAR-Plus gateway.",
+      "ground_truth_verdict": "SUPPORTED",
+      "expected_evidence_keywords": ["EDGAR-Plus", "electronic regulatory gateway"]
+    },
+    {
+      "claim_id": "TC003",
+      "claim": "Physical paper submissions of compliance filings are strictly prohibited.",
+      "ground_truth_verdict": "SUPPORTED",
+      "expected_evidence_keywords": ["paper submissions are prohibited"]
+    },
+    {
+      "claim_id": "TC004",
+      "claim": "Entities have 90 days following fiscal year end to submit their annual reports.",
+      "ground_truth_verdict": "REFUTED",
+      "expected_evidence_keywords": ["30 days"]
+    },
+    {
+      "claim_id": "TC005",
+      "claim": "The statutory base civil penalty for late filing violations is $50,000 per violation.",
+      "ground_truth_verdict": "REFUTED",
+      "expected_evidence_keywords": ["$15,000 per violation"]
+    },
+    {
+      "claim_id": "TC006",
+      "claim": "Paper submissions are accepted if submitted with a written waiver.",
+      "ground_truth_verdict": "REFUTED",
+      "expected_evidence_keywords": ["Physical paper submissions are prohibited"]
+    },
+    {
+      "claim_id": "TC007",
+      "claim": "Entities are required to undergo bi-monthly environmental emissions audits.",
+      "ground_truth_verdict": "UNVERIFIED",
+      "expected_evidence_keywords": []
+    },
+    {
+      "claim_id": "TC008",
+      "claim": "Foreign subsidiaries are granted a 6-month filing grace period.",
+      "ground_truth_verdict": "UNVERIFIED",
+      "expected_evidence_keywords": []
+    },
+    {
+      "claim_id": "TC009",
+      "claim": "Enterprises with under $2.5 million revenue are exempt from quarterly third-party audits.",
+      "ground_truth_verdict": "SUPPORTED",
+      "expected_evidence_keywords": ["$2.5 million", "exempt"]
+    },
+    {
+      "claim_id": "TC010",
+      "claim": "The maximum permissible hardship extension is 45 days upon notice.",
+      "ground_truth_verdict": "REFUTED",
+      "expected_evidence_keywords": ["14-day hardship extension"]
+    }
+  ]
+}

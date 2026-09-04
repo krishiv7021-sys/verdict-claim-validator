@@ -1,0 +1,35 @@
+%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length 456 >>
+stream
+BT
+/F1 14 Tf
+50 720 Td
+(CORPORATE REGULATORY COMPLIANCE DIRECTIVE 2026) Tj
+0 -30 Td
+/F1 11 Tf
+(Section 1: All corporate annual filings must be completed within 30 days.) Tj
+0 -20 Td
+(Section 2: Filings must be transmitted through the electronic portal.) Tj
+0 -20 Td
+(Section 3: The statutory base penalty for late filing is \$15,000 per violation.) Tj
+0 -20 Td
+(Section 4: Entities with revenue under \$2.5 million are exempt from quarterly audits.) Tj
+ET
+endstream
+endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+xref
+0 6
+0000000000 65535 f 
+0000000010 00000 n 
+0000000060 00000 n 
+0000000117 00000 n 
+0000000244 00000 n 
+0000000600 00000 n 
+trailer << /Size 6 /Root 1 0 R >>
+startxref
+680
+%%EOF

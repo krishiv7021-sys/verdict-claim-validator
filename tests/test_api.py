@@ -10,8 +10,8 @@ def test_api_root():
     response = client.get("/")
     assert response.status_code == 200
     data = response.json()
-    assert data["project"] == "VERDICT: Claim Validato"
-    assert data["team"] == "Cygnix"
+    assert data["project"] == "VERDICT"
+    assert data["subtitle"] == "Claim Verification & Evidence Analysis"
     assert data["status"] == "online"
 
 
@@ -79,4 +79,48 @@ def test_api_certificate_and_report_retrieval():
     # Retrieve human-readable report
     report_resp = client.get(f"/certificate/{cert_id}/report")
     assert report_resp.status_code == 200
-    assert "VERDICT: Evidence-Grounded Verification Report" in report_resp.text
+    assert "VERDICT — Claim Verification & Evidence Analysis Report" in report_resp.text
+
+
+def test_api_verify_with_source_authorities():
+    import json
+    draft = "Annual compliance filings are due within 30 days."
+    source_content = b"Mandatory Deadline: All annual filings must be completed within 30 days."
+    authorities = {"compliance.txt": "STATUTORY / OFFICIAL"}
+
+    files = [
+        ("source_files", ("compliance.txt", io.BytesIO(source_content), "text/plain"))
+    ]
+    data = {
+        "draft_text": draft,
+        "source_authorities": json.dumps(authorities)
+    }
+
+    response = client.post("/verify", data=data, files=files)
+    assert response.status_code == 200
+    res = response.json()
+    assert res["status"] == "success"
+    cert = res["certificate"]
+    assert cert["sources"][0]["authority_level"] == "STATUTORY / OFFICIAL"
+    assert cert["sources"][0]["authority_weight"] == 1.00
+    claim = cert["claims"][0]
+    assert claim["source_authority"] == "STATUTORY / OFFICIAL"
+    assert claim["ranking_score"] > 0.0
+    assert claim["processing_time_ms"] >= 0.0
+    assert cert["input_hash"] is not None
+    assert cert["summary"]["total_time_seconds"] >= 0.0
+
+
+def test_api_evaluation_endpoint():
+    response = client.get("/evaluation?fresh=false")
+    assert response.status_code == 200
+    data = response.json()
+    assert "accuracy" in data
+    assert "macro_f1" in data
+    assert "confusion_matrix" in data
+    assert "class_metrics" in data
+    assert "SUPPORTED" in data["class_metrics"]
+    assert "REFUTED" in data["class_metrics"]
+    assert "UNVERIFIED" in data["class_metrics"]
+    assert data["total_test_cases"] > 0
+

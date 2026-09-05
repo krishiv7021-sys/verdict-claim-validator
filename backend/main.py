@@ -29,8 +29,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("verdict_api")
 
 app = FastAPI(
-    title="VERDICT: Claim Validato API",
-    description="A reproducible, evidence-grounded verification layer that ties every AI-generated claim to its exact source text.",
+    title="VERDICT — Claim Verification & Evidence Analysis API",
+    description="VERDICT is an evidence-grounded claim verification system that analyzes AI-generated content against trusted source documents, identifies supported, refuted, and unverified claims, and provides precise evidence for each verification decision.",
     version="1.0.0"
 )
 
@@ -49,17 +49,17 @@ pipeline = VerificationPipeline()
 @app.get("/")
 def read_root():
     return {
-        "project": "VERDICT: Claim Validato",
-        "team": "Cygnix",
-        "track": "Generative AI & Trustworthy Systems",
-        "tagline": "A reproducible, evidence-grounded verification layer that ties every AI-generated claim to its exact source text.",
+        "project": "VERDICT",
+        "subtitle": "Claim Verification & Evidence Analysis",
+        "description": "VERDICT is an evidence-grounded claim verification system that analyzes AI-generated content against trusted source documents, identifies supported, refuted, and unverified claims, and provides precise evidence for each verification decision.",
         "status": "online",
         "endpoints": {
             "health": "/health",
             "verify": "POST /verify",
             "certificate": "/certificate/{certificate_id}",
             "report": "/certificate/{certificate_id}/report",
-            "demo": "/demo"
+            "demo": "/demo",
+            "evaluation": "/evaluation"
         }
     }
 
@@ -82,18 +82,36 @@ def get_demo_data():
     return get_demo_package()
 
 
+@app.get("/evaluation")
+def get_evaluation(fresh: bool = False):
+    """
+    Returns benchmark evaluation metrics including accuracy, precision, recall, F1,
+    confusion matrix, and execution timing metrics.
+    Set fresh=true to re-run the benchmark suite dynamically.
+    """
+    try:
+        from evaluation.evaluate import get_or_run_benchmark
+        return get_or_run_benchmark(fresh=fresh)
+    except Exception as e:
+        logger.error(f"Evaluation benchmark error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
+
+
 @app.post("/verify", response_model=VerifyResponse)
 async def verify_claims_endpoint(
     draft_text: Optional[str] = Form(None),
     draft_file: Optional[UploadFile] = File(None),
-    source_files: List[UploadFile] = File(None)
+    source_files: List[UploadFile] = File(None),
+    source_authorities: Optional[str] = Form(None)
 ):
     """
     Accepts:
     - AI-generated draft as text or uploaded TXT file
-    - One or more source documents (PDF or TXT)
+    - One or more source documents (PDF, DOCX, PPTX, XLSX, CSV, TXT, MD, JSON, HTML)
+    - Optional source_authorities mapping (JSON string or dict)
     Returns:
-    - Complete verification certificate with individual claim results, evidence spans, and cryptographic hashes.
+    - Complete verification certificate with individual claim results, evidence spans,
+      source authority weighting, conflict detection, and cryptographic hashes.
     """
     try:
         # Resolve draft text
@@ -118,6 +136,18 @@ async def verify_claims_endpoint(
                 error="Draft text was empty. No claims to evaluate."
             )
 
+        # Parse source_authorities if provided
+        parsed_authorities = {}
+        if source_authorities:
+            try:
+                import json
+                if isinstance(source_authorities, str):
+                    parsed_authorities = json.loads(source_authorities)
+                elif isinstance(source_authorities, dict):
+                    parsed_authorities = source_authorities
+            except Exception as parse_err:
+                logger.warning(f"Could not parse source_authorities JSON: {parse_err}")
+
         # Process source documents
         files_to_process = []
         if source_files:
@@ -131,6 +161,7 @@ async def verify_claims_endpoint(
         certificate = pipeline.run_verification(
             draft_text=resolved_draft,
             source_files=files_to_process,
+            source_authorities=parsed_authorities if parsed_authorities else None,
             top_k=3,
             similarity_threshold=0.25
         )

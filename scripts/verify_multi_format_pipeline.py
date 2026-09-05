@@ -11,7 +11,7 @@ from backend.schemas import VerdictType, OverallVerdict
 
 def main():
     print("=" * 75)
-    print("🌐 VERDICT: Claim Validato Multi-Format Verification Test (9 Formats)")
+    print("🌐 VERDICT Multi-Format Verification Test (9 Formats)")
     print("=" * 75)
 
     demo_dir = Path(__file__).parent.parent / "data" / "demo_files"

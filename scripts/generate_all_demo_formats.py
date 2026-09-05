@@ -27,8 +27,8 @@ try:
     prs = pptx.Presentation()
     # Slide 1: Title
     s1 = prs.slides.add_slide(prs.slide_layouts[0])
-    s1.shapes.title.text = "Cygnix Executive Strategy 2026"
-    s1.shapes.placeholders[1].text = "Trustworthy AI Verification Infrastructure"
+    s1.shapes.title.text = "Corporate Strategic Plan"
+    s1.shapes.placeholders[1].text = "AI Verification & Evidence Infrastructure"
 
     # Slide 2: Milestones
     s2 = prs.slides.add_slide(prs.slide_layouts[1])

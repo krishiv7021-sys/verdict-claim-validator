@@ -1,6 +1,6 @@
-# VERDICT: Evidence-Grounded Verification Report
-**Certificate ID**: `vc_aefaead07fd6`
-**Verification Timestamp**: 2026-09-03T20:59:19.965434+00:00
+# VERDICT — Claim Verification & Evidence Analysis Report
+**Certificate ID**: `vc_179d717a142b`
+**Verification Timestamp**: 2026-09-05T11:50:51.150214+00:00
 **Overall Status**: 🔴 REVIEW REQUIRED
 
 ---
@@ -14,10 +14,10 @@
 
 ---
 ## 2. Source Documents & Cryptographic Hashes
-| Document Name | SHA-256 Checksum | Pages |
-| :--- | :--- | :--- |
-| `sample_policy.pdf` | `18e84cf19d0ca18e871beb7626d15365ea218504a515ada94da04b4605c250b2` | 1 |
-| `sample_policy.txt` | `552ca1d7d00622e8e46b3f8012dbb1222af0bf8bb99c0cec749af72483b827d5` | 1 |
+| Document Name | Format | SHA-256 Checksum | Evidence Scope |
+| :--- | :--- | :--- | :--- |
+| `sample_policy.pdf` | `PDF` | `18e84cf19d0ca18e...` | 1 locations |
+| `sample_policy.txt` | `TXT` | `552ca1d7d00622e8...` | 4 locations |
 
 ---
 ## 3. Claim-by-Claim Verification Audit

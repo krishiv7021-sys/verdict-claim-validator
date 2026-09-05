@@ -12,7 +12,7 @@ from backend.schemas import VerdictType, OverallVerdict
 
 def main():
     print("=" * 70)
-    print("🚀 Running VERDICT: Claim Validato End-to-End Verification Pipeline")
+    print("🚀 Running VERDICT End-to-End Verification Pipeline")
     print("=" * 70)
 
     data_dir = Path(__file__).parent.parent / "data"

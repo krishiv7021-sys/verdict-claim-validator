@@ -28,7 +28,7 @@ SAMPLE_DEMO_AI_DRAFT = """Here is the executive briefing based on the compliance
 
 
 def get_demo_package() -> Dict[str, Any]:
-    """Returns bundled demo draft and source document for 1-click judging demonstrations."""
+    """Returns bundled demo draft and source document for 1-click system demonstrations."""
     return {
         "draft_text": SAMPLE_DEMO_AI_DRAFT,
         "source_filename": "CRD_Compliance_Directive_2026.txt",

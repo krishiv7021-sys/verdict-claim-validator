@@ -1,0 +1,159 @@
+{
+  "dataset_name": "VERDICT Benchmark 50-Claim Evaluation Suite",
+  "total_test_cases": 10,
+  "correct_verdicts": 7,
+  "accuracy": 70.0,
+  "retrieval_precision": 100.0,
+  "macro_f1": 65.34,
+  "total_time_seconds": 4.226,
+  "avg_time_per_claim_ms": 422.6,
+  "class_metrics": {
+    "SUPPORTED": {
+      "precision": 80.0,
+      "recall": 100.0,
+      "f1_score": 88.89,
+      "support": 4,
+      "true_positives": 4,
+      "false_positives": 1,
+      "false_negatives": 0
+    },
+    "REFUTED": {
+      "precision": 66.67,
+      "recall": 50.0,
+      "f1_score": 57.14,
+      "support": 4,
+      "true_positives": 2,
+      "false_positives": 1,
+      "false_negatives": 2
+    },
+    "UNVERIFIED": {
+      "precision": 50.0,
+      "recall": 50.0,
+      "f1_score": 50.0,
+      "support": 2,
+      "true_positives": 1,
+      "false_positives": 1,
+      "false_negatives": 1
+    }
+  },
+  "confusion_matrix": {
+    "SUPPORTED": {
+      "SUPPORTED": 4,
+      "REFUTED": 0,
+      "UNVERIFIED": 0
+    },
+    "REFUTED": {
+      "SUPPORTED": 1,
+      "REFUTED": 2,
+      "UNVERIFIED": 1
+    },
+    "UNVERIFIED": {
+      "SUPPORTED": 0,
+      "REFUTED": 1,
+      "UNVERIFIED": 1
+    }
+  },
+  "test_cases": [
+    {
+      "claim_id": "TC001",
+      "claim": "Regulated entities must submit annual compliance disclosures within 30 days after fiscal year end.",
+      "ground_truth": "SUPPORTED",
+      "predicted": "SUPPORTED",
+      "is_correct": true,
+      "retrieval_hit": true,
+      "evidence_text": "1.1 Mandatory Deadline: All regulated entities must complete and submit their annual compliance disclosures within 30 days following the conclusion of the fiscal year.",
+      "processing_time_ms": 2370.56
+    },
+    {
+      "claim_id": "TC002",
+      "claim": "All annual filings must be submitted electronically through the EDGAR-Plus gateway.",
+      "ground_truth": "SUPPORTED",
+      "predicted": "SUPPORTED",
+      "is_correct": true,
+      "retrieval_hit": true,
+      "evidence_text": "1.2 Electronic Submission: All annual filings must be transmitted exclusively through the secure electronic regulatory gateway (EDGAR-Plus). Physical paper submissions are prohibited.",
+      "processing_time_ms": 54.29
+    },
+    {
+      "claim_id": "TC003",
+      "claim": "Physical paper submissions of compliance filings are strictly prohibited.",
+      "ground_truth": "SUPPORTED",
+      "predicted": "SUPPORTED",
+      "is_correct": true,
+      "retrieval_hit": true,
+      "evidence_text": "1.2 Electronic Submission: All annual filings must be transmitted exclusively through the secure electronic regulatory gateway (EDGAR-Plus). Physical paper submissions are prohibited.",
+      "processing_time_ms": 431.62
+    },
+    {
+      "claim_id": "TC004",
+      "claim": "Entities have 90 days following fiscal year end to submit their annual reports.",
+      "ground_truth": "REFUTED",
+      "predicted": "REFUTED",
+      "is_correct": true,
+      "retrieval_hit": true,
+      "evidence_text": "1.1 Mandatory Deadline: All regulated entities must complete and submit their annual compliance disclosures within 30 days following the conclusion of the fiscal year.",
+      "processing_time_ms": 343.01
+    },
+    {
+      "claim_id": "TC005",
+      "claim": "The statutory base civil penalty for late filing violations is $50,000 per violation.",
+      "ground_truth": "REFUTED",
+      "predicted": "REFUTED",
+      "is_correct": true,
+      "retrieval_hit": true,
+      "evidence_text": "2.1 Late Filing Penalties: Any entity failing to meet the 30-day submission deadline is subject to a statutory base civil penalty of $15,000 per violation, plus $500 for each subsequent day of delay.",
+      "processing_time_ms": 52.26
+    },
+    {
+      "claim_id": "TC006",
+      "claim": "Paper submissions are accepted if submitted with a written waiver.",
+      "ground_truth": "REFUTED",
+      "predicted": "UNVERIFIED",
+      "is_correct": false,
+      "retrieval_hit": true,
+      "evidence_text": "1.2 Electronic Submission: All annual filings must be transmitted exclusively through the secure electronic regulatory gateway (EDGAR-Plus). Physical paper submissions are prohibited.",
+      "processing_time_ms": 437.49
+    },
+    {
+      "claim_id": "TC007",
+      "claim": "Entities are required to undergo bi-monthly environmental emissions audits.",
+      "ground_truth": "UNVERIFIED",
+      "predicted": "UNVERIFIED",
+      "is_correct": true,
+      "retrieval_hit": null,
+      "evidence_text": "3.1 Small Enterprise Exemption: Commercial enterprises with an aggregate gross annual revenue of less than $2.5 million are explicitly exempt from mandatory quarterly third-party audit verifications.",
+      "processing_time_ms": 445.96
+    },
+    {
+      "claim_id": "TC008",
+      "claim": "Foreign subsidiaries are granted a 6-month filing grace period.",
+      "ground_truth": "UNVERIFIED",
+      "predicted": "REFUTED",
+      "is_correct": false,
+      "retrieval_hit": null,
+      "evidence_text": "2.1 Late Filing Penalties: Any entity failing to meet the 30-day submission deadline is subject to a statutory base civil penalty of $15,000 per violation, plus $500 for each subsequent day of delay.",
+      "processing_time_ms": 26.19
+    },
+    {
+      "claim_id": "TC009",
+      "claim": "Enterprises with under $2.5 million revenue are exempt from quarterly third-party audits.",
+      "ground_truth": "SUPPORTED",
+      "predicted": "SUPPORTED",
+      "is_correct": true,
+      "retrieval_hit": true,
+      "evidence_text": "3.1 Small Enterprise Exemption: Commercial enterprises with an aggregate gross annual revenue of less than $2.5 million are explicitly exempt from mandatory quarterly third-party audit verifications.",
+      "processing_time_ms": 36.69
+    },
+    {
+      "claim_id": "TC010",
+      "claim": "The maximum permissible hardship extension is 45 days upon notice.",
+      "ground_truth": "REFUTED",
+      "predicted": "SUPPORTED",
+      "is_correct": false,
+      "retrieval_hit": true,
+      "evidence_text": "3.2 Extension Requests: A single 14-day hardship extension may be granted upon formal written notice submitted at least 5 business days prior to the statutory deadline.",
+      "processing_time_ms": 27.92
+    }
+  ],
+  "timestamp": "2026-09-05T12:02:53Z"
+}

@@ -2,7 +2,7 @@ import os
 import json
 import logging
 import re
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 import requests
 
 from backend.schemas import VerdictType, EvidenceSpan
@@ -23,6 +23,7 @@ CRITICAL PRINCIPLE:
 - You must output ONLY a valid JSON object with keys: "verdict", "confidence", and "reason".
 """
 
+
 def extract_json_from_response(text: str) -> Dict[str, Any]:
     """Safely extracts JSON from an LLM response."""
     text = text.strip()
@@ -39,27 +40,20 @@ class HeuristicNLIEntailmentEngine:
     """
     High-precision, deterministic fallback entailment engine.
     Analyzes numeric discrepancies, modal verbs, negation polarity, and semantic overlap.
+    Supports single-span verification and multi-candidate cross-source conflict detection.
     Guarantees zero crashes and conservative UNVERIFIED outputs when uncertain.
     """
-    def verify_claim(self, claim_text: str, evidence_spans: List[EvidenceSpan]) -> Tuple[VerdictType, float, str]:
-        if not evidence_spans:
-            return (
-                VerdictType.UNVERIFIED,
-                0.0,
-                "No relevant evidence was found in the uploaded source documents."
-            )
-
-        # Use top candidate evidence
-        best_evidence = evidence_spans[0]
-        ev_text = best_evidence.text.strip()
+    def verify_span(self, claim_text: str, span: EvidenceSpan) -> Tuple[VerdictType, float, str]:
+        """Evaluates entailment for a single evidence span against the claim."""
+        ev_text = span.text.strip()
         c_text = claim_text.strip()
 
         # If similarity is very low, do not attempt to verify
-        if best_evidence.similarity < 0.35:
+        if span.similarity < 0.35:
             return (
                 VerdictType.UNVERIFIED,
-                round(best_evidence.similarity, 2),
-                f"Closest retrieved passage in {best_evidence.source} has insufficient semantic relevance (similarity {best_evidence.similarity:.2f})."
+                round(span.similarity, 2),
+                f"Closest retrieved passage in {span.source} has insufficient semantic relevance (similarity {span.similarity:.2f})."
             )
 
         # 1. Number / Metric Contradiction Detection
@@ -88,7 +82,7 @@ class HeuristicNLIEntailmentEngine:
         c_metrics = _extract_metrics(c_text)
         ev_metrics = _extract_metrics(ev_text)
 
-        loc_str = best_evidence.location or (f"Page {best_evidence.page}" if best_evidence.page else "Source Document")
+        loc_str = span.location or (f"Page {span.page}" if span.page else "Source Document")
 
         if c_metrics and ev_metrics:
             for c_val, c_unit, c_raw in c_metrics:
@@ -98,7 +92,7 @@ class HeuristicNLIEntailmentEngine:
                         return (
                             VerdictType.REFUTED,
                             0.95,
-                            f"Direct numeric contradiction: Claim specifies '{c_raw}' but source document specifies '{ev_raw}' in {best_evidence.source} ({loc_str})."
+                            f"Direct numeric contradiction: Claim specifies '{c_raw}' but source document specifies '{ev_raw}' in {span.source} ({loc_str})."
                         )
 
         # 2. Negation & Permission Contradiction Detection
@@ -141,7 +135,7 @@ class HeuristicNLIEntailmentEngine:
             return (
                 VerdictType.REFUTED,
                 0.92,
-                f"Direct regulatory contradiction: Claim asserts permission/prohibition contradicted by source in {best_evidence.source} ({loc_str})."
+                f"Direct regulatory contradiction: Claim asserts permission/prohibition contradicted by source in {span.source} ({loc_str})."
             )
 
         # Contradiction Case B: Claim explicitly negates what source affirms
@@ -149,30 +143,115 @@ class HeuristicNLIEntailmentEngine:
             return (
                 VerdictType.REFUTED,
                 0.90,
-                f"Contradictory polarity: Claim negates source requirement in {best_evidence.source} ({loc_str})."
+                f"Contradictory polarity: Claim negates source requirement in {span.source} ({loc_str})."
             )
 
         # Support criteria:
         # High keyword overlap and strong retrieval similarity
-        if overlap_ratio >= 0.45 and best_evidence.similarity >= 0.50:
+        if overlap_ratio >= 0.45 and span.similarity >= 0.50:
             return (
                 VerdictType.SUPPORTED,
-                round(min(0.96, best_evidence.similarity + 0.1), 2),
-                f"Evidence directly confirms claim: '{ev_text[:120]}...' in {best_evidence.source} ({loc_str})."
+                round(min(0.96, span.similarity + 0.1), 2),
+                f"Evidence directly confirms claim: '{ev_text[:120]}...' in {span.source} ({loc_str})."
             )
-        elif overlap_ratio >= 0.35 and best_evidence.similarity >= 0.70:
+        elif overlap_ratio >= 0.35 and span.similarity >= 0.70:
             return (
                 VerdictType.SUPPORTED,
-                round(min(0.92, best_evidence.similarity), 2),
-                f"Evidence confirms claim meaning in {best_evidence.source} ({loc_str})."
+                round(min(0.92, span.similarity), 2),
+                f"Evidence confirms claim meaning in {span.source} ({loc_str})."
             )
 
         # Conservative fallback
         return (
             VerdictType.UNVERIFIED,
-            round(best_evidence.similarity, 2),
-            f"Evidence in {best_evidence.source} ({loc_str}) is related but does not fully establish or contradict the claim."
+            round(span.similarity, 2),
+            f"Evidence in {span.source} ({loc_str}) is related but does not fully establish or contradict the claim."
         )
+
+    def verify_claim(self, claim_text: str, evidence_spans: List[EvidenceSpan]) -> Tuple[VerdictType, float, str]:
+        """Backward-compatible single verdict evaluator over evidence candidate list."""
+        if not evidence_spans:
+            return (
+                VerdictType.UNVERIFIED,
+                0.0,
+                "No relevant evidence was found in the uploaded source documents."
+            )
+        return self.verify_span(claim_text, evidence_spans[0])
+
+    def evaluate_candidates(
+        self,
+        claim_text: str,
+        evidence_spans: List[EvidenceSpan]
+    ) -> Dict[str, Any]:
+        """
+        Evaluates all candidate spans to identify primary evidence, supporting evidence,
+        and cross-source conflicting evidence.
+        """
+        if not evidence_spans:
+            return {
+                "verdict": VerdictType.UNVERIFIED,
+                "confidence": 0.0,
+                "reason": "No relevant evidence was found in the uploaded source documents.",
+                "primary_evidence": None,
+                "supporting_evidence": [],
+                "conflicting_evidence": [],
+                "conflict_detected": False
+            }
+
+        primary_span = evidence_spans[0]
+        p_verdict, p_conf, p_reason = self.verify_span(claim_text, primary_span)
+
+        supporting_spans: List[EvidenceSpan] = []
+        conflicting_spans: List[EvidenceSpan] = []
+
+        if p_verdict == VerdictType.SUPPORTED:
+            supporting_spans.append(primary_span)
+        elif p_verdict == VerdictType.REFUTED:
+            conflicting_spans.append(primary_span)
+
+        # Evaluate secondary candidate spans
+        for span in evidence_spans[1:]:
+            span_v, span_conf, span_reason = self.verify_span(claim_text, span)
+            if span_v == VerdictType.SUPPORTED:
+                if span.chunk_id != primary_span.chunk_id:
+                    supporting_spans.append(span)
+            elif span_v == VerdictType.REFUTED:
+                # Material contradiction from a different source file
+                if span.source != primary_span.source:
+                    conflicting_spans.append(span)
+
+        conflict_detected = False
+        final_reason = p_reason
+
+        # Case A: Primary evidence supports claim, but another source document refutes it
+        if p_verdict == VerdictType.SUPPORTED and conflicting_spans:
+            conflict_detected = True
+            conflict_source = conflicting_spans[0]
+            final_reason = (
+                f"Source conflict detected: Grounded by {primary_span.source} ({primary_span.location or 'N/A'}, {primary_span.authority_level}), "
+                f"but materially contradicted by {conflict_source.source} ({conflict_source.location or 'N/A'}, {conflict_source.authority_level}). "
+                f"Review required."
+            )
+
+        # Case B: Primary evidence refutes claim, but another source document supports it
+        elif p_verdict == VerdictType.REFUTED and supporting_spans:
+            conflict_detected = True
+            supp_source = supporting_spans[0]
+            final_reason = (
+                f"Source conflict detected: Contradicted by {primary_span.source} ({primary_span.location or 'N/A'}, {primary_span.authority_level}), "
+                f"but affirmed by {supp_source.source} ({supp_source.location or 'N/A'}, {supp_source.authority_level}). "
+                f"Review required."
+            )
+
+        return {
+            "verdict": p_verdict,
+            "confidence": p_conf,
+            "reason": final_reason,
+            "primary_evidence": primary_span,
+            "supporting_evidence": supporting_spans,
+            "conflicting_evidence": conflicting_spans,
+            "conflict_detected": conflict_detected
+        }
 
 
 class LLMEntailmentEngine:
@@ -185,6 +264,34 @@ class LLMEntailmentEngine:
         self.api_key = api_key
         self.model_name = model_name
         self.fallback = HeuristicNLIEntailmentEngine()
+
+    def verify_span(self, claim_text: str, span: EvidenceSpan) -> Tuple[VerdictType, float, str]:
+        return self.verify_claim(claim_text, [span])
+
+    def evaluate_candidates(
+        self,
+        claim_text: str,
+        evidence_spans: List[EvidenceSpan]
+    ) -> Dict[str, Any]:
+        """
+        Uses heuristic NLI engine to check cross-source conflict matrix,
+        and LLM for primary entailment.
+        """
+        eval_result = self.fallback.evaluate_candidates(claim_text, evidence_spans)
+        if not evidence_spans:
+            return eval_result
+
+        # Run primary candidate through LLM if available
+        try:
+            llm_v, llm_conf, llm_reason = self.verify_claim(claim_text, [evidence_spans[0]])
+            eval_result["verdict"] = llm_v
+            eval_result["confidence"] = llm_conf
+            if not eval_result["conflict_detected"]:
+                eval_result["reason"] = llm_reason
+        except Exception:
+            pass
+
+        return eval_result
 
     def verify_claim(self, claim_text: str, evidence_spans: List[EvidenceSpan]) -> Tuple[VerdictType, float, str]:
         if not evidence_spans:

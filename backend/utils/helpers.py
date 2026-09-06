@@ -1,9 +1,9 @@
 import re
 from typing import Dict, Any
 
-SAMPLE_DEMO_SOURCE_TEXT = """CORPORATE REGULATORY COMPLIANCE DIRECTIVE (CRD-2026)
-Document Reference: CRD-SEC-2026-V2
-Effective Date: January 1, 2026
+SAMPLE_DEMO_SOURCE_TEXT = """CORPORATE REGULATORY COMPLIANCE DIRECTIVE (CRD)
+Document Reference: CRD-SEC-V2
+Effective Date: January 1
 
 SECTION 1: FILING REQUIREMENTS & TIMELINES
 1.1 Mandatory Deadline: All regulated entities must complete and submit their annual compliance disclosures within 30 days following the conclusion of the fiscal year.
@@ -31,7 +31,7 @@ def get_demo_package() -> Dict[str, Any]:
     """Returns bundled demo draft and source document for 1-click system demonstrations."""
     return {
         "draft_text": SAMPLE_DEMO_AI_DRAFT,
-        "source_filename": "CRD_Compliance_Directive_2026.txt",
+        "source_filename": "CRD_Compliance_Directive.txt",
         "source_content": SAMPLE_DEMO_SOURCE_TEXT
     }
 

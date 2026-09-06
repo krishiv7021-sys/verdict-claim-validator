@@ -1,7 +1,7 @@
 {
   "dataset_name": "VERDICT Benchmark 50-Claim Evaluation Suite",
   "version": "1.0",
-  "source_document": "CRD_Compliance_Directive_2026.txt",
+  "source_document": "CRD_Compliance_Directive.txt",
   "source_content": "SECTION 1: FILING REQUIREMENTS & TIMELINES\n1.1 Mandatory Deadline: All regulated entities must complete and submit their annual compliance disclosures within 30 days following the conclusion of the fiscal year.\n1.2 Electronic Submission: All annual filings must be transmitted exclusively through the secure electronic regulatory gateway (EDGAR-Plus). Physical paper submissions are prohibited.\n1.3 Executive Attestation: The Chief Executive Officer and Chief Compliance Officer must jointly sign the digital attestation certificate.\n\nSECTION 2: PENALTIES & ENFORCEMENT\n2.1 Late Filing Penalties: Any entity failing to meet the 30-day submission deadline is subject to a statutory base civil penalty of $15,000 per violation, plus $500 for each subsequent day of delay.\n2.2 Willful Misrepresentation: Knowingly submitting falsified compliance records constitutes a Class B regulatory felony subject to license suspension.\n\nSECTION 3: EXEMPTIONS & SPECIAL PROVISIONS\n3.1 Small Enterprise Exemption: Commercial enterprises with an aggregate gross annual revenue of less than $2.5 million are explicitly exempt from mandatory quarterly third-party audit verifications.\n3.2 Extension Requests: A single 14-day hardship extension may be granted upon formal written notice submitted at least 5 business days prior to the statutory deadline.",
   "test_cases": [
     {

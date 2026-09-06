@@ -13,11 +13,12 @@ __pycache__/
 .env
 .env.local
 
-# Data uploads and certificates
+# Data uploads, reports and certificates
 data/uploads/*
 !data/uploads/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
+data/vc_*_report.md
 certificates/*.json
 !certificates/.gitkeep
 
@@ -30,3 +31,4 @@ htmlcov/
 .DS_Store
 .vscode/
 .idea/
+.streamlit/credentials.toml

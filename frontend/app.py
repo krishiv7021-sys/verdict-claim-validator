@@ -294,8 +294,8 @@ with tab_verify:
         ]
 
         if st.session_state.demo_mode_active and not uploaded_sources:
-            st.info("📌 **Demo Documents Attached**: `CRD_Compliance_Directive_2026.txt` (Regulatory Compliance Standard)")
-            st.session_state.source_authorities_selection["CRD_Compliance_Directive_2026.txt"] = SourceAuthorityLevel.POLICY.value
+            st.info("📌 **Demo Documents Attached**: `CRD_Compliance_Directive.txt` (Regulatory Compliance Standard)")
+            st.session_state.source_authorities_selection["CRD_Compliance_Directive.txt"] = SourceAuthorityLevel.POLICY.value
 
         if uploaded_sources:
             st.caption(f"📁 {len(uploaded_sources)} document(s) ready for ingestion — configure authority levels:")
@@ -330,7 +330,7 @@ with tab_verify:
                 for sf in uploaded_sources:
                     files_to_send.append((sf.name, sf.getvalue()))
             elif st.session_state.demo_mode_active:
-                files_to_send.append(("CRD_Compliance_Directive_2026.txt", SAMPLE_DEMO_SOURCE_TEXT.encode("utf-8")))
+                files_to_send.append(("CRD_Compliance_Directive.txt", SAMPLE_DEMO_SOURCE_TEXT.encode("utf-8")))
 
             if not files_to_send:
                 st.warning("⚠️ No source documents uploaded. Verification will evaluate claims without grounding.")
@@ -687,7 +687,7 @@ with tab_eval:
 
     b_col1, b_col2 = st.columns([3, 1])
     with b_col1:
-        st.caption("Ground Truth Benchmark Dataset: `CRD_Compliance_Directive_2026` (Multi-Section Regulatory Standard)")
+        st.caption("Ground Truth Benchmark Dataset: `CRD_Compliance_Directive` (Multi-Section Regulatory Standard)")
     with b_col2:
         run_bench_clicked = st.button("▶️ Run Live Benchmark", type="primary", use_container_width=True)
 

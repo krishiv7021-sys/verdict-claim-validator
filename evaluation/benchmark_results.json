@@ -5,8 +5,8 @@
   "accuracy": 70.0,
   "retrieval_precision": 100.0,
   "macro_f1": 65.34,
-  "total_time_seconds": 4.226,
-  "avg_time_per_claim_ms": 422.6,
+  "total_time_seconds": 3.987,
+  "avg_time_per_claim_ms": 398.7,
   "class_metrics": {
     "SUPPORTED": {
       "precision": 80.0,
@@ -62,7 +62,7 @@
       "is_correct": true,
       "retrieval_hit": true,
       "evidence_text": "1.1 Mandatory Deadline: All regulated entities must complete and submit their annual compliance disclosures within 30 days following the conclusion of the fiscal year.",
-      "processing_time_ms": 2370.56
+      "processing_time_ms": 2218.17
     },
     {
       "claim_id": "TC002",
@@ -72,7 +72,7 @@
       "is_correct": true,
       "retrieval_hit": true,
       "evidence_text": "1.2 Electronic Submission: All annual filings must be transmitted exclusively through the secure electronic regulatory gateway (EDGAR-Plus). Physical paper submissions are prohibited.",
-      "processing_time_ms": 54.29
+      "processing_time_ms": 53.98
     },
     {
       "claim_id": "TC003",
@@ -82,7 +82,7 @@
       "is_correct": true,
       "retrieval_hit": true,
       "evidence_text": "1.2 Electronic Submission: All annual filings must be transmitted exclusively through the secure electronic regulatory gateway (EDGAR-Plus). Physical paper submissions are prohibited.",
-      "processing_time_ms": 431.62
+      "processing_time_ms": 406.66
     },
     {
       "claim_id": "TC004",
@@ -92,7 +92,7 @@
       "is_correct": true,
       "retrieval_hit": true,
       "evidence_text": "1.1 Mandatory Deadline: All regulated entities must complete and submit their annual compliance disclosures within 30 days following the conclusion of the fiscal year.",
-      "processing_time_ms": 343.01
+      "processing_time_ms": 319.95
     },
     {
       "claim_id": "TC005",
@@ -102,7 +102,7 @@
       "is_correct": true,
       "retrieval_hit": true,
       "evidence_text": "2.1 Late Filing Penalties: Any entity failing to meet the 30-day submission deadline is subject to a statutory base civil penalty of $15,000 per violation, plus $500 for each subsequent day of delay.",
-      "processing_time_ms": 52.26
+      "processing_time_ms": 54.16
     },
     {
       "claim_id": "TC006",
@@ -112,7 +112,7 @@
       "is_correct": false,
       "retrieval_hit": true,
       "evidence_text": "1.2 Electronic Submission: All annual filings must be transmitted exclusively through the secure electronic regulatory gateway (EDGAR-Plus). Physical paper submissions are prohibited.",
-      "processing_time_ms": 437.49
+      "processing_time_ms": 412.14
     },
     {
       "claim_id": "TC007",
@@ -122,7 +122,7 @@
       "is_correct": true,
       "retrieval_hit": null,
       "evidence_text": "3.1 Small Enterprise Exemption: Commercial enterprises with an aggregate gross annual revenue of less than $2.5 million are explicitly exempt from mandatory quarterly third-party audit verifications.",
-      "processing_time_ms": 445.96
+      "processing_time_ms": 421.61
     },
     {
       "claim_id": "TC008",
@@ -132,7 +132,7 @@
       "is_correct": false,
       "retrieval_hit": null,
       "evidence_text": "2.1 Late Filing Penalties: Any entity failing to meet the 30-day submission deadline is subject to a statutory base civil penalty of $15,000 per violation, plus $500 for each subsequent day of delay.",
-      "processing_time_ms": 26.19
+      "processing_time_ms": 36.91
     },
     {
       "claim_id": "TC009",
@@ -142,7 +142,7 @@
       "is_correct": true,
       "retrieval_hit": true,
       "evidence_text": "3.1 Small Enterprise Exemption: Commercial enterprises with an aggregate gross annual revenue of less than $2.5 million are explicitly exempt from mandatory quarterly third-party audit verifications.",
-      "processing_time_ms": 36.69
+      "processing_time_ms": 33.7
     },
     {
       "claim_id": "TC010",
@@ -152,8 +152,8 @@
       "is_correct": false,
       "retrieval_hit": true,
       "evidence_text": "3.2 Extension Requests: A single 14-day hardship extension may be granted upon formal written notice submitted at least 5 business days prior to the statutory deadline.",
-      "processing_time_ms": 27.92
+      "processing_time_ms": 29.38
     }
   ],
-  "timestamp": "2026-09-05T12:02:53Z"
+  "timestamp": "2026-09-06T10:33:58Z"
 }

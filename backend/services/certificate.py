@@ -97,16 +97,24 @@ def save_certificate_to_disk(
     return str(file_path)
 
 
+from backend.utils.security import safe_resolve_path, sanitize_filename
+
 def load_certificate_from_disk(
     certificate_id: str,
     storage_dir: str = "certificates"
 ) -> VerificationCertificate:
-    file_path = Path(storage_dir) / f"{certificate_id}.json"
+    clean_id = sanitize_filename(certificate_id).replace(".json", "")
+    try:
+        file_path = safe_resolve_path(storage_dir, f"{clean_id}.json")
+    except ValueError as err:
+        raise FileNotFoundError(f"Invalid certificate path: {err}")
+
     if not file_path.exists():
         raise FileNotFoundError(f"Certificate {certificate_id} not found.")
     with open(file_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     return VerificationCertificate.model_validate(data)
+
 
 
 def generate_human_readable_report(cert: VerificationCertificate) -> str:

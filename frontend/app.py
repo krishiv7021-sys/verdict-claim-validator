@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import html
 import requests
 import streamlit as st
 from datetime import datetime
@@ -323,71 +324,99 @@ with tab_verify:
         final_draft = draft_text.strip()
         if not final_draft:
             st.error("Please provide an AI-generated draft to verify.")
+        elif len(final_draft) > 50000:
+            st.error(f"AI draft exceeds maximum allowed length of 50,000 characters (current: {len(final_draft):,}).")
         else:
-            # Prepare files
-            files_to_send = []
+            # Validate source file sizes before submission
+            oversized = False
+            total_source_bytes = 0
             if uploaded_sources:
                 for sf in uploaded_sources:
-                    files_to_send.append((sf.name, sf.getvalue()))
-            elif st.session_state.demo_mode_active:
-                files_to_send.append(("CRD_Compliance_Directive.txt", SAMPLE_DEMO_SOURCE_TEXT.encode("utf-8")))
+                    total_source_bytes += sf.size
+                    if sf.size > 25 * 1024 * 1024:
+                        st.error(f"File '{sf.name}' exceeds the maximum allowed size of 25 MB.")
+                        oversized = True
+                        break
+                if total_source_bytes > 50 * 1024 * 1024:
+                    st.error("Total uploaded files exceed the aggregate limit of 50 MB.")
+                    oversized = True
 
-            if not files_to_send:
-                st.warning("⚠️ No source documents uploaded. Verification will evaluate claims without grounding.")
+            if not oversized:
+                # Prepare files
+                files_to_send = []
+                if uploaded_sources:
+                    for sf in uploaded_sources:
+                        files_to_send.append((sf.name, sf.getvalue()))
+                elif st.session_state.demo_mode_active:
+                    files_to_send.append(("CRD_Compliance_Directive.txt", SAMPLE_DEMO_SOURCE_TEXT.encode("utf-8")))
 
-            # Progress workflow indicator
-            progress_placeholder = st.empty()
-            with progress_placeholder.container():
-                st.markdown("⏳ **Verification in progress...**")
-                p_bar = st.progress(10)
-                
-                p_bar.progress(25, text="1/5 Reading & hashing source documents...")
-                p_bar.progress(45, text="2/5 Extracting page & chunk metadata + authority weighting...")
-                p_bar.progress(65, text="3/5 Decomposing draft into atomic claims...")
-                p_bar.progress(80, text="4/5 Retrieving BAAI/bge-small-en-v1.5 embeddings & conflict analysis...")
-                p_bar.progress(95, text="5/5 Running entailment verification & assembling certificate...")
+                if not files_to_send:
+                    st.warning("⚠️ No source documents uploaded. Verification will evaluate claims without grounding.")
 
-            # Run verification: Try backend API first, fallback to direct in-process pipeline
-            cert_data = None
-            authorities_payload = st.session_state.source_authorities_selection
-            try:
-                multipart_files = []
-                for fname, b_data in files_to_send:
-                    multipart_files.append(("source_files", (fname, b_data, "application/octet-stream")))
-                
-                form_data = {
-                    "draft_text": final_draft,
-                    "source_authorities": json.dumps(authorities_payload)
-                }
+                # Progress workflow indicator
+                progress_placeholder = st.empty()
+                with progress_placeholder.container():
+                    st.markdown("⏳ **Verification in progress...**")
+                    p_bar = st.progress(10)
+                    
+                    p_bar.progress(25, text="1/5 Reading & hashing source documents...")
+                    p_bar.progress(45, text="2/5 Extracting page & chunk metadata + authority weighting...")
+                    p_bar.progress(65, text="3/5 Decomposing draft into atomic claims...")
+                    p_bar.progress(80, text="4/5 Retrieving BAAI/bge-small-en-v1.5 embeddings & conflict analysis...")
+                    p_bar.progress(95, text="5/5 Running entailment verification & assembling certificate...")
 
-                resp = requests.post(
-                    f"{BACKEND_URL}/verify",
-                    data=form_data,
-                    files=multipart_files,
-                    timeout=45
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    cert_data = data.get("certificate")
-            except Exception:
-                pass
+                # Run verification: Try backend API first, fallback to direct in-process pipeline
+                cert_data = None
+                authorities_payload = st.session_state.source_authorities_selection
+                try:
+                    multipart_files = []
+                    for fname, b_data in files_to_send:
+                        multipart_files.append(("source_files", (fname, b_data, "application/octet-stream")))
+                    
+                    form_data = {
+                        "draft_text": final_draft,
+                        "source_authorities": json.dumps(authorities_payload)
+                    }
 
-            if not cert_data:
-                # Direct in-process verification fallback
-                pipeline = VerificationPipeline()
-                cert_obj = pipeline.run_verification(
-                    draft_text=final_draft,
-                    source_files=files_to_send,
-                    source_authorities=authorities_payload if authorities_payload else None,
-                    top_k=top_k,
-                    similarity_threshold=similarity_threshold
-                )
-                cert_data = cert_obj.model_dump()
+                    resp = requests.post(
+                        f"{BACKEND_URL}/verify",
+                        data=form_data,
+                        files=multipart_files,
+                        timeout=45
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        cert_data = data.get("certificate")
+                    else:
+                        try:
+                            err_detail = resp.json().get("detail", f"Verification could not be completed (HTTP {resp.status_code}).")
+                        except Exception:
+                            err_detail = f"Verification could not be completed (HTTP {resp.status_code})."
+                        progress_placeholder.empty()
+                        st.error(f"❌ {err_detail}")
+                        cert_data = None
+                except requests.exceptions.ConnectionError:
+                    # Backend server not running - local in-process fallback
+                    pipeline = VerificationPipeline()
+                    cert_obj = pipeline.run_verification(
+                        draft_text=final_draft,
+                        source_files=files_to_send,
+                        source_authorities=authorities_payload if authorities_payload else None,
+                        top_k=top_k,
+                        similarity_threshold=similarity_threshold
+                    )
+                    cert_data = cert_obj.model_dump()
+                except Exception as ex:
+                    progress_placeholder.empty()
+                    st.error(f"❌ Verification request error: {ex}")
+                    cert_data = None
 
-            progress_placeholder.empty()
-            st.session_state.verification_result = cert_data
-            st.session_state.selected_claim_id = cert_data["claims"][0]["claim_id"] if cert_data.get("claims") else None
-            st.toast("Verification Complete! Certificate Generated.", icon="✅")
+                progress_placeholder.empty()
+                if cert_data:
+                    st.session_state.verification_result = cert_data
+                    st.session_state.selected_claim_id = cert_data["claims"][0]["claim_id"] if cert_data.get("claims") else None
+                    st.toast("Verification Complete! Certificate Generated.", icon="✅")
+
 
     # DISPLAY VERIFICATION RESULTS
     if st.session_state.verification_result:
@@ -538,16 +567,19 @@ with tab_verify:
 
                     if primary_ev:
                         p_auth = primary_ev.get("authority_level", DEFAULT_AUTHORITY_LEVEL)
+                        p_text_esc = html.escape(str(primary_ev.get('text', '')))
+                        p_src_esc = html.escape(str(primary_ev.get('source', '')))
+                        p_loc_esc = html.escape(str(primary_ev.get('location', 'Page 1')))
                         st.markdown("##### 📌 Primary Evidence Candidate:")
                         st.markdown(f"""
                         <div class="evidence-box">
                             <p style="margin: 0; font-style: italic; color: #f8fafc;">
-                                "{primary_ev.get('text')}"
+                                "{p_text_esc}"
                             </p>
                             <div style="margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
-                                <span class="source-meta-tag">📄 {primary_ev.get('source')}</span>
+                                <span class="source-meta-tag">📄 {p_src_esc}</span>
                                 {get_auth_badge_html(p_auth)}
-                                <span class="source-meta-tag">📍 {primary_ev.get('location', 'Page 1')}</span>
+                                <span class="source-meta-tag">📍 {p_loc_esc}</span>
                                 <span class="source-meta-tag">🎯 Similarity: {primary_ev.get('similarity', 0.0):.2f}</span>
                                 <span class="source-meta-tag">⚡ Ranking: {primary_ev.get('ranking_score', primary_ev.get('similarity', 0.0)):.2f}</span>
                             </div>
@@ -558,15 +590,18 @@ with tab_verify:
                         st.markdown("##### 🔴 Contradicting Evidence Passages:")
                         for c_ev in conflicting_evs:
                             c_auth = c_ev.get("authority_level", DEFAULT_AUTHORITY_LEVEL)
+                            c_text_esc = html.escape(str(c_ev.get('text', '')))
+                            c_src_esc = html.escape(str(c_ev.get('source', '')))
+                            c_loc_esc = html.escape(str(c_ev.get('location', 'Page 1')))
                             st.markdown(f"""
                             <div class="conflict-evidence-box">
                                 <p style="margin: 0; font-style: italic; color: #fecaca;">
-                                    "{c_ev.get('text')}"
+                                    "{c_text_esc}"
                                 </p>
                                 <div style="margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
-                                    <span class="source-meta-tag" style="border: 1px solid #7f1d1d;">📄 {c_ev.get('source')}</span>
+                                    <span class="source-meta-tag" style="border: 1px solid #7f1d1d;">📄 {c_src_esc}</span>
                                     {get_auth_badge_html(c_auth)}
-                                    <span class="source-meta-tag">📍 {c_ev.get('location', 'Page 1')}</span>
+                                    <span class="source-meta-tag">📍 {c_loc_esc}</span>
                                     <span class="source-meta-tag">🎯 Similarity: {c_ev.get('similarity', 0.0):.2f}</span>
                                 </div>
                             </div>
@@ -582,23 +617,27 @@ with tab_verify:
                         loc_val = top_ev.get('location') or (f"Page {top_ev.get('page')}" if top_ev.get('page') else "N/A")
                         file_fmt = str(top_ev.get('file_type') or top_ev.get('source', '').split('.')[-1]).upper()
                         top_auth = top_ev.get('authority_level', src_auth)
+                        top_text_esc = html.escape(str(top_ev.get('text', '')))
+                        top_src_esc = html.escape(str(top_ev.get('source', '')))
+                        top_loc_esc = html.escape(str(loc_val))
 
                         st.markdown(f"""
                         <div class="evidence-box">
                             <p style="margin: 0; font-style: italic; color: #f8fafc;">
-                                "{top_ev.get('text')}"
+                                "{top_text_esc}"
                             </p>
                             <div style="margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
-                                <span class="source-meta-tag">📄 Source: {top_ev.get('source')}</span>
+                                <span class="source-meta-tag">📄 Source: {top_src_esc}</span>
                                 {get_auth_badge_html(top_auth)}
                                 <span class="source-meta-tag">🏷️ Format: {file_fmt}</span>
-                                <span class="source-meta-tag">📍 {loc_type.capitalize()}: {loc_val}</span>
+                                <span class="source-meta-tag">📍 {loc_type.capitalize()}: {top_loc_esc}</span>
                                 <span class="source-meta-tag">🎯 Similarity: {top_ev.get('similarity', 0.0):.2f}</span>
                                 <span class="source-meta-tag">⚡ Ranking: {top_ev.get('ranking_score', top_ev.get('similarity', 0.0)):.2f}</span>
                                 <span class="source-meta-tag">🆔 Chunk: {top_ev.get('chunk_id', 'N/A')}</span>
                             </div>
                         </div>
                         """, unsafe_allow_html=True)
+
 
                         if len(evidence_list) > 1:
                             with st.expander(f"View {len(evidence_list)-1} other candidate passages"):

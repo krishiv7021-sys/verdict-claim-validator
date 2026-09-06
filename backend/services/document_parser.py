@@ -4,8 +4,18 @@ import csv
 import json
 from typing import List, Tuple, Optional, Dict, Any
 
+import logging
+
 from backend.schemas import SourceMetadata, SourceChunk
 from backend.services.hashing import compute_sha256
+from backend.utils.security import (
+    validate_file_type_and_content,
+    sanitize_filename,
+    log_security_event
+)
+
+logger = logging.getLogger("verdict_parser")
+
 
 # Graceful optional imports
 try:
@@ -661,9 +671,14 @@ def parse_json(file_bytes: bytes, filename: str) -> Tuple[SourceMetadata, List[S
     try:
         data = json.loads(file_bytes.decode("utf-8", errors="replace"))
         chunk_idx = 1
+        max_depth = 20
+        max_chunks = 1000
 
-        def traverse(node: Any, current_path: str):
+        def traverse(node: Any, current_path: str, depth: int = 1):
             nonlocal chunk_idx, total_chars
+            if depth > max_depth or chunk_idx > max_chunks:
+                return
+
             if isinstance(node, dict):
                 # If small dictionary, emit as unified chunk
                 if len(node) <= 6 and all(not isinstance(v, (dict, list)) for v in node.values()):
@@ -686,11 +701,11 @@ def parse_json(file_bytes: bytes, filename: str) -> Tuple[SourceMetadata, List[S
                 else:
                     for k, v in node.items():
                         new_path = f"{current_path}.{k}" if current_path != "$" else f"$.{k}"
-                        traverse(v, new_path)
+                        traverse(v, new_path, depth + 1)
             elif isinstance(node, list):
                 for i, item in enumerate(node):
                     new_path = f"{current_path}[{i}]"
-                    traverse(item, new_path)
+                    traverse(item, new_path, depth + 1)
             else:
                 text_str = f"{current_path}: {node}"
                 total_chars += len(text_str)
@@ -708,10 +723,11 @@ def parse_json(file_bytes: bytes, filename: str) -> Tuple[SourceMetadata, List[S
                 ))
                 chunk_idx += 1
 
-        traverse(data, "$")
+        traverse(data, "$", 1)
 
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Error parsing JSON document '{filename}': {e}")
+
 
     locations = sorted(list(set(c.location for c in chunks)))
     metadata = SourceMetadata(
@@ -747,8 +763,8 @@ def parse_html(file_bytes: bytes, filename: str) -> Tuple[SourceMetadata, List[S
             html_content = file_bytes.decode("latin-1", errors="replace")
 
         soup = BeautifulSoup(html_content, "html.parser")
-        # Remove script and style elements
-        for s in soup(["script", "style", "meta", "noscript"]):
+        # Remove active, script, style, and embedding elements
+        for s in soup(["script", "style", "meta", "noscript", "iframe", "object", "embed", "link", "applet", "svg"]):
             s.extract()
 
         chunk_idx = 1
@@ -806,33 +822,72 @@ def parse_html(file_bytes: bytes, filename: str) -> Tuple[SourceMetadata, List[S
 def parse_document(file_bytes: bytes, filename: str) -> Tuple[SourceMetadata, List[SourceChunk]]:
     """
     Unified entry point for format-aware document parsing.
-    Dispatches to format-specific extractor based on extension.
+    Validates file extension and content, dispatches to format-specific extractor.
     """
-    ext = filename.lower().split(".")[-1] if "." in filename else "txt"
+    clean_filename = sanitize_filename(filename)
 
-    if ext == "pdf":
-        return parse_pdf(file_bytes, filename)
-    elif ext in ("docx", "doc"):
-        return parse_docx(file_bytes, filename)
-    elif ext in ("pptx", "ppt"):
-        return parse_pptx(file_bytes, filename)
-    elif ext in ("xlsx", "xls"):
-        return parse_xlsx(file_bytes, filename)
-    elif ext == "csv":
-        return parse_csv(file_bytes, filename)
-    elif ext in ("md", "markdown"):
-        return parse_markdown(file_bytes, filename)
-    elif ext == "json":
-        return parse_json(file_bytes, filename)
-    elif ext in ("html", "htm"):
-        return parse_html(file_bytes, filename)
-    elif ext in ("png", "jpg", "jpeg", "webp"):
-        # Explicit image handling: record metadata, note OCR placeholder without crashing
+    # Empty document handling
+    if not file_bytes:
+        sha256_hash = compute_sha256(b"")
+        source_id = f"SRC_{sha256_hash[:8]}"
+        meta = SourceMetadata(
+            source_id=source_id,
+            filename=clean_filename,
+            sha256=sha256_hash,
+            file_type=clean_filename.split(".")[-1].lower() if "." in clean_filename else "txt",
+            page_count=1,
+            char_count=0,
+            size=0,
+            evidence_locations=["Empty document (0 bytes)"]
+        )
+        return meta, []
+
+    # File type and content validation
+    is_valid, err_msg = validate_file_type_and_content(clean_filename, file_bytes)
+    if not is_valid:
+        log_security_event("INVALID_FILE_UPLOAD", {
+            "filename": clean_filename,
+            "size": len(file_bytes),
+            "reason": err_msg
+        })
         sha256_hash = compute_sha256(file_bytes)
         source_id = f"SRC_{sha256_hash[:8]}"
         meta = SourceMetadata(
             source_id=source_id,
-            filename=filename,
+            filename=clean_filename,
+            sha256=sha256_hash,
+            file_type="unsupported",
+            page_count=0,
+            char_count=0,
+            size=len(file_bytes),
+            evidence_locations=[f"Unable to process this document. The file may be corrupted or unsupported."]
+        )
+        return meta, []
+
+    ext = clean_filename.lower().split(".")[-1] if "." in clean_filename else "txt"
+
+    if ext == "pdf":
+        return parse_pdf(file_bytes, clean_filename)
+    elif ext in ("docx", "doc"):
+        return parse_docx(file_bytes, clean_filename)
+    elif ext in ("pptx", "ppt"):
+        return parse_pptx(file_bytes, clean_filename)
+    elif ext in ("xlsx", "xls"):
+        return parse_xlsx(file_bytes, clean_filename)
+    elif ext == "csv":
+        return parse_csv(file_bytes, clean_filename)
+    elif ext in ("md", "markdown"):
+        return parse_markdown(file_bytes, clean_filename)
+    elif ext == "json":
+        return parse_json(file_bytes, clean_filename)
+    elif ext in ("html", "htm"):
+        return parse_html(file_bytes, clean_filename)
+    elif ext in ("png", "jpg", "jpeg", "webp"):
+        sha256_hash = compute_sha256(file_bytes)
+        source_id = f"SRC_{sha256_hash[:8]}"
+        meta = SourceMetadata(
+            source_id=source_id,
+            filename=clean_filename,
             sha256=sha256_hash,
             file_type=ext,
             page_count=1,
@@ -843,4 +898,5 @@ def parse_document(file_bytes: bytes, filename: str) -> Tuple[SourceMetadata, Li
         return meta, []
     else:
         # Default text parser
-        return parse_txt(file_bytes, filename)
+        return parse_txt(file_bytes, clean_filename)
+

@@ -166,7 +166,7 @@ AI Draft Text ────► Atomic Claim Decomposition                ▼
 - **Entailment Analysis**:
   - Deterministic Rule-Based NLI: Handles numeric contradiction detection, obligation/prohibition inversion, negation checking, and stemmed keyword overlap.
   - Cloud Providers (Optional): Groq (`llama-3.3-70b-versatile`), OpenAI (`gpt-4o-mini`), Google Gemini (`gemini-1.5-flash`).
-- **Testing & Quality Assurance**: Pytest (36 automated tests), benchmark evaluation suite.
+- **Testing & Quality Assurance**: Pytest (71 automated tests across unit, integration, and security layers), benchmark evaluation suite.
 
 ---
 
@@ -427,7 +427,9 @@ curl -X POST "http://localhost:8000/verify" \
 │   │   ├── retriever.py         # Authority-weighted candidate retrieval
 │   │   └── verifier.py          # Master verification orchestration pipeline
 │   └── utils/
-│       └── helpers.py           # Demo text and shared utilities
+│       ├── helpers.py           # Demo text and shared utilities
+│       ├── rate_limiter.py      # In-memory sliding-window rate limiter
+│       └── security.py          # Upload limits, content sniffing, sanitization
 ├── data/
 │   ├── demo_files/              # Multi-format demo files (DOCX, PPTX, XLSX, CSV, etc.)
 │   ├── sample_policy.pdf        # Ground-truth PDF reference document
@@ -452,8 +454,9 @@ curl -X POST "http://localhost:8000/verify" \
 │   ├── test_document_parser.py  # TXT and PDF parser unit tests
 │   ├── test_hashing.py          # SHA-256 integrity and tamper detection tests
 │   ├── test_new_formats.py      # DOCX, PPTX, XLSX, CSV, MD, JSON, HTML parser tests
-│   └── test_pipeline.py         # End-to-end pipeline and verdict logic tests
-├── .env.example                 # Template for environment configuration
+│   ├── test_pipeline.py         # End-to-end pipeline and verdict logic tests
+│   └── test_security.py         # 35 security, upload validation, and prompt injection tests
+├── .env.example                 # Template for environment configuration with security limits
 ├── .gitignore                   # Git exclusion rules for secrets, caches, and reports
 ├── requirements.txt             # Pinned project dependencies
 └── README.md                    # Project documentation
@@ -461,7 +464,42 @@ curl -X POST "http://localhost:8000/verify" \
 
 ---
 
-## 18. Limitations
+## 18. Security Architecture & Controls
+
+VERDICT applies defense-in-depth controls for document uploads, API inputs, and entailment verification. Security controls are continuously improved as the application evolves.
+
+### Key Security Principles
+
+- **Untrusted Document Content = Data**: Uploaded source documents and AI draft texts are strictly isolated as passive data. Embedded commands (such as *"IGNORE ALL PREVIOUS INSTRUCTIONS"*, *"Mark as supported"*, *"Reveal system prompt"*) are ignored by the verification engine and never executed.
+- **Backend as Verification Authority**: LLMs function solely as reasoning components. The backend enforces source hashes, evidence IDs, citation validation, and conservative fallback decisions.
+- **Zero Fabrication Policy**: If evidence is missing, partial, or ambiguous, verdicts default conservatively to `UNVERIFIED` rather than failing upward into `SUPPORTED`.
+
+### Security Implementation Matrix
+
+| Security Layer | Implementation Detail | Configuration |
+| :--- | :--- | :--- |
+| **Allowed File Types** | Strict allowlist: `.pdf`, `.docx`, `.pptx`, `.xlsx`, `.csv`, `.md`, `.markdown`, `.json`, `.html`, `.htm`, `.txt`. Executables (`.exe`, `.py`, `.sh`, `.php`, `.js`, etc.) are explicitly rejected. | Hardened allowlist in `backend/utils/security.py` |
+| **Magic Byte Sniffing** | Validates internal byte headers (`%PDF-`, `PK\x03\x04`, JSON structure, clean text encoding) to prevent extension spoofing. | Automated in `validate_file_type_and_content()` |
+| **File Size Limits** | Default 25 MB per file and 50 MB aggregate upload limit per verification request. Oversized files are rejected before processing. | `MAX_FILE_SIZE_MB=25`, `MAX_TOTAL_UPLOAD_SIZE_MB=50` |
+| **Input Constraints** | AI drafts capped at 50,000 characters; source file count capped at 15 documents per verification request. | `MAX_DRAFT_CHARS=50000`, `MAX_SOURCE_FILES=15` |
+| **Filename Sanitization** | Filenames are stripped of path components (`../`, `..\`), null bytes (`\x00`), control characters, and leading dots; names are clamped to 255 chars. | `sanitize_filename()` |
+| **Path Traversal Protection** | Safe resolution ensures temporary and certificate file access never escapes designated project directories. | `safe_resolve_path()` |
+| **Rate Limiting** | In-memory sliding window rate limiter protects `/verify` from abusive automated requests (default 10 requests/minute per client IP). | `RATE_LIMIT_PER_MINUTE=10` |
+| **CORS Policy** | Restricts origins to configured client addresses (default: `http://localhost:8501`, `http://127.0.0.1:8501`, `http://localhost:3000`). | `ALLOWED_ORIGINS` in `.env` |
+| **Authority Allowlist** | Source authorities are strictly validated against `STATUTORY`, `POLICY`, `INTERNAL`, `REFERENCE`; arbitrary weights are rejected/clamped to [0.90, 1.00]. | `normalize_authority_level()` |
+| **Prompt Injection Defense** | Input isolation in `<CLAIM>` and `<EVIDENCE>` tags, backend-assigned Evidence IDs (`E001`, `E002`), rejection of hallucinated citations, and imperative command filtering. | Delimited prompts in `entailment.py` |
+| **Safe Error Handling** | Global exception handlers catch unhandled server exceptions, log diagnostics server-side, and return clean JSON without leaking Python tracebacks or secrets. | Zero Traceback Policy in `main.py` |
+| **Secret Management** | API keys and credentials are read exclusively from environment variables, never committed, logged, or exposed in certificates or error messages. | Pydantic configuration & `.gitignore` |
+
+### Security Limitations & Boundaries
+
+- **Defense-in-Depth Disclaimer**: VERDICT applies multiple defensive layers against prompt injection, denial of service, and malformed uploads. No heuristic or LLM-based defense can be guaranteed 100% immune to novel adversarial prompts.
+- **Local Rate Limiter**: The built-in rate limiter is an in-memory sliding window appropriate for single-instance deployments; distributed multi-node production setups should utilize a reverse proxy or API gateway.
+- **Encrypted Files**: Password-protected archives cannot be inspected and must be decrypted prior to verification.
+
+---
+
+## 19. Limitations
 
 - **Scanned Document OCR**: Pure raster image files (PNG, JPG, TIFF) and non-text scanned PDFs currently return a structured notice rather than attempting ungrounded character recognition.
 - **Encrypted Archives**: Password-protected PDF and Office documents must be decrypted before ingestion.
@@ -469,7 +507,7 @@ curl -X POST "http://localhost:8000/verify" \
 
 ---
 
-## 19. Future Improvements
+## 20. Future Improvements
 
 - **Native OCR Engine**: Integration with open-source OCR libraries (e.g., Tesseract or PaddleOCR) for scanned PDFs and embedded document images.
 - **Citation Insertion**: Automatically injecting grounded inline footnote citations back into the original draft text.
@@ -480,7 +518,7 @@ curl -X POST "http://localhost:8000/verify" \
 
 ## Testing & Quality Assurance
 
-Run the complete automated test suite (36 tests across unit, integration, and API layers):
+Run the complete automated test suite (71 tests across unit, integration, and security layers):
 ```bash
 pytest -v tests/
 ```
@@ -489,3 +527,4 @@ Run the benchmark evaluation runner:
 ```bash
 python evaluation/evaluate.py
 ```
+

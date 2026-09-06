@@ -301,7 +301,7 @@ Every verification run produces a machine-readable JSON Certificate (specificati
 
 ## 13. Evaluation
 
-VERDICT includes an automated benchmark evaluation suite (`evaluation/evaluate.py`) that benchmarks verification accuracy and retrieval precision against ground-truth datasets.
+VERDICT includes an automated benchmark evaluation suite (`evaluation/evaluate.py`) that benchmarks verification accuracy and retrieval precision against a ground-truth dataset of 10 curated test cases. *(Note: This evaluation benchmark is distinct from the 71 automated unit, integration, and security tests in `tests/`).*
 
 ### Benchmark Results Summary
 
@@ -339,8 +339,8 @@ VERDICT includes an automated benchmark evaluation suite (`evaluation/evaluate.p
 ### Setup Steps
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/verdict-claim-verification.git
-cd verdict-claim-verification
+git clone https://github.com/krishiv7021-sys/verdict-claim-validator.git
+cd verdict-claim-validator
 
 # Create and activate virtual environment
 python3 -m venv venv

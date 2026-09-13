@@ -1,5 +1,7 @@
 # VERDICT — Claim Verification & Evidence Analysis
 
+[![CI](https://github.com/krishiv7021-sys/verdict-claim-validator/actions/workflows/ci.yml/badge.svg)](https://github.com/krishiv7021-sys/verdict-claim-validator/actions/workflows/ci.yml)
+
 > VERDICT is an evidence-grounded verification system that checks AI-generated claims against source documents and provides precise, inspectable evidence for verification decisions.
 
 ---
@@ -453,6 +455,9 @@ curl -X POST "http://localhost:8000/verify" \
 │   ├── generate_sample_files.py      # Generator for sample PDF/TXT files
 │   ├── verify_demo_pipeline.py       # End-to-end verification verification script
 │   └── verify_multi_format_pipeline.py # 9-format pipeline test script
+├── .github/
+│   └── workflows/
+│       └── ci.yml               # GitHub Actions CI workflow (automated testing on push/PR)
 ├── tests/
 │   ├── conftest.py              # Pytest configuration and shared fixtures
 │   ├── test_advanced_features.py# Tests for authority weighting and conflict detection
@@ -461,8 +466,10 @@ curl -X POST "http://localhost:8000/verify" \
 │   ├── test_database.py         # 15 tests for SQLite schema, transactions, rollback, history
 │   ├── test_document_parser.py  # TXT and PDF parser unit tests
 │   ├── test_hashing.py          # SHA-256 integrity and tamper detection tests
+│   ├── test_multi_doc_multi_claim.py # Multi-document and multi-claim verification tests
 │   ├── test_new_formats.py      # DOCX, PPTX, XLSX, CSV, MD, JSON, HTML parser tests
 │   ├── test_pipeline.py         # End-to-end pipeline and verdict logic tests
+│   ├── test_quantitative_verification.py # Numeric, duration, and boundary contradiction tests
 │   └── test_security.py         # 35 security, upload validation, and prompt injection tests
 ├── .env.example                 # Template for environment configuration with security limits
 ├── .gitignore                   # Git exclusion rules for secrets, caches, and reports
@@ -543,13 +550,28 @@ VERDICT features a persistent relational storage layer implemented with SQLite (
 
 ## Testing & Quality Assurance
 
-Run the complete automated test suite (86 tests across unit, integration, database persistence, and security layers):
+Run the complete automated test suite (112 tests across unit, integration, database persistence, multi-source conflict, and security layers):
 ```bash
-pytest -v tests/
+pytest -v
 ```
 
 Run the benchmark evaluation runner:
 ```bash
 python evaluation/evaluate.py
 ```
+
+---
+
+## Continuous Integration (CI)
+
+VERDICT utilizes GitHub Actions for continuous integration, automatically running the complete 112-test suite on every push and pull request targeting the `main` branch.
+
+- **Workflow Definition**: [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
+- **Environment**: Ubuntu Linux with Python 3.10
+- **Automation Pipeline**:
+  - Automatic dependency installation with pip caching
+  - HuggingFace embeddings model cache (`BAAI/bge-small-en-v1.5`)
+  - Execution of the full test suite using local deterministic fallbacks
+  - Zero external API dependencies or hardcoded credentials
+
 

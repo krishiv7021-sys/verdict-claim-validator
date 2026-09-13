@@ -1,9 +1,12 @@
 import os
 import json
 import uuid
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
+
+logger = logging.getLogger(__name__)
 
 from backend.schemas import (
     VerificationCertificate,
@@ -114,6 +117,26 @@ def load_certificate_from_disk(
     with open(file_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     return VerificationCertificate.model_validate(data)
+
+
+def load_certificate(
+    certificate_id: str,
+    storage_dir: str = "certificates"
+) -> VerificationCertificate:
+    """
+    Retrieves a certificate by ID.
+    Checks the persistent SQLite database first for fast retrieval,
+    falling back to disk storage for legacy or exported certificates.
+    """
+    try:
+        from backend.database.repository import get_certificate_from_db
+        db_cert = get_certificate_from_db(certificate_id)
+        if db_cert is not None:
+            return db_cert
+    except Exception as e:
+        logger.debug(f"Database lookup for {certificate_id} fell back to disk: {e}")
+
+    return load_certificate_from_disk(certificate_id, storage_dir=storage_dir)
 
 
 

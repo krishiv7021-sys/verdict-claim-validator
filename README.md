@@ -155,6 +155,7 @@ AI Draft Text ────► Atomic Claim Decomposition                ▼
 
 - **Core Backend**: Python 3.9+, FastAPI, Uvicorn, Pydantic v2
 - **Frontend Dashboard**: Streamlit, Custom Responsive CSS
+- **Persistent Storage**: SQLite (via Python standard library `sqlite3`), WAL journal mode, cascading foreign keys, parameterized queries, and ACID transactional integrity
 - **Vector Embeddings**: `BAAI/bge-small-en-v1.5` via `sentence-transformers` (with deterministic subword TF-IDF fallback)
 - **Document Extractors**:
   - PDF: `pypdf`
@@ -166,7 +167,7 @@ AI Draft Text ────► Atomic Claim Decomposition                ▼
 - **Entailment Analysis**:
   - Deterministic Rule-Based NLI: Handles numeric contradiction detection, obligation/prohibition inversion, negation checking, and stemmed keyword overlap.
   - Cloud Providers (Optional): Groq (`llama-3.3-70b-versatile`), OpenAI (`gpt-4o-mini`), Google Gemini (`gemini-1.5-flash`).
-- **Testing & Quality Assurance**: Pytest (71 automated tests across unit, integration, and security layers), benchmark evaluation suite.
+- **Testing & Quality Assurance**: Pytest (86 automated tests across unit, integration, database persistence, and security layers), benchmark evaluation suite.
 
 ---
 
@@ -301,7 +302,7 @@ Every verification run produces a machine-readable JSON Certificate (specificati
 
 ## 13. Evaluation
 
-VERDICT includes an automated benchmark evaluation suite (`evaluation/evaluate.py`) that benchmarks verification accuracy and retrieval precision against a ground-truth dataset of 10 curated test cases. *(Note: This evaluation benchmark is distinct from the 71 automated unit, integration, and security tests in `tests/`).*
+VERDICT includes an automated benchmark evaluation suite (`evaluation/evaluate.py`) that benchmarks verification accuracy and retrieval precision against a ground-truth dataset of 10 curated test cases. *(Note: This evaluation benchmark is distinct from the 86 automated unit, integration, database persistence, and security tests in `tests/`).*
 
 ### Benchmark Results Summary
 
@@ -391,11 +392,13 @@ VERDICT exposes a RESTful API via FastAPI:
 | Method | Endpoint | Description | Parameters |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/` | API status, metadata, and available endpoints | None |
-| `GET` | `/health` | Service health, active embedding model, entailment provider | None |
+| `GET` | `/health` | Service health, active embedding model, entailment provider, DB status | None |
 | `GET` | `/demo` | Bundled demo draft and source document for testing | None |
 | `POST` | `/verify` | Execute verification on draft text and source files | `draft_text`, `draft_file`, `source_files`, `source_authorities` |
+| `GET` | `/verifications` | Paginated list of historical verification runs from SQLite | `limit` (default `50`), `offset` (default `0`) |
+| `GET` | `/verifications/{id}` | Complete verification record, claims, evidence, and audit metadata | `id` (path, verification or certificate ID) |
 | `GET` | `/evaluation` | Benchmark evaluation metrics, F1 scores, confusion matrix | `fresh` (optional boolean, default `false`) |
-| `GET` | `/certificate/{id}` | Retrieve stored JSON verification certificate | `id` (path) |
+| `GET` | `/certificate/{id}` | Retrieve stored JSON verification certificate (DB or disk) | `id` (path) |
 | `GET` | `/certificate/{id}/report` | Retrieve human-readable Markdown report | `id` (path) |
 | `POST` | `/certificate/{id}/export` | Export downloadable JSON certificate data | `id` (path) |
 
@@ -415,10 +418,14 @@ curl -X POST "http://localhost:8000/verify" \
 ```
 .
 ├── backend/
-│   ├── main.py                  # FastAPI server and REST endpoints
-│   ├── schemas.py               # Pydantic v2 data models and enums
+│   ├── database/                # Persistent storage layer (SQLite)
+│   │   ├── connection.py        # Connection manager, WAL mode, pragmas, transactions
+│   │   ├── repository.py        # Parameterized queries, atomic save, history queries
+│   │   └── schema.py            # DDL definitions and automated schema migrations
+│   ├── main.py                  # FastAPI server, lifespan events, and REST endpoints
+│   ├── schemas.py               # Pydantic v2 data models, enums, and history schemas
 │   ├── services/
-│   │   ├── certificate.py       # Certificate synthesis and Markdown report generator
+│   │   ├── certificate.py       # Certificate synthesis, disk/DB loading, Markdown report
 │   │   ├── claim_decomposer.py  # Rule-based atomic claim segmentation
 │   │   ├── document_parser.py   # Ingestion layer for 9 document formats
 │   │   ├── embeddings.py        # Vector embedding wrapper (BGE-Small / TF-IDF)
@@ -439,7 +446,7 @@ curl -X POST "http://localhost:8000/verify" \
 │   ├── benchmark_results.json   # Cached evaluation metrics and confusion matrix
 │   └── evaluate.py              # Benchmark execution script and metrics calculator
 ├── frontend/
-│   └── app.py                   # Streamlit verification interface and evaluation dashboard
+│   └── app.py                   # Streamlit verification interface, history viewer, and evaluation dashboard
 ├── scripts/
 │   ├── demo_advanced_verification.py # Authority weighting and conflict demonstration
 │   ├── generate_all_demo_formats.py  # Generator for multi-format demo files
@@ -451,6 +458,7 @@ curl -X POST "http://localhost:8000/verify" \
 │   ├── test_advanced_features.py# Tests for authority weighting and conflict detection
 │   ├── test_api.py              # FastAPI endpoint tests
 │   ├── test_claim_decomposer.py # Sentence splitting and claim extraction tests
+│   ├── test_database.py         # 15 tests for SQLite schema, transactions, rollback, history
 │   ├── test_document_parser.py  # TXT and PDF parser unit tests
 │   ├── test_hashing.py          # SHA-256 integrity and tamper detection tests
 │   ├── test_new_formats.py      # DOCX, PPTX, XLSX, CSV, MD, JSON, HTML parser tests
@@ -499,7 +507,24 @@ VERDICT applies defense-in-depth controls for document uploads, API inputs, and 
 
 ---
 
-## 19. Limitations
+## 19. Persistent Storage Architecture
+
+VERDICT features a persistent relational storage layer implemented with SQLite (Python standard library `sqlite3`) to retain verification runs, atomic claims, evidence grounding, and tamper-evident certificates across application restarts.
+
+### Key Architecture Details
+
+- **Database Engine**: Embedded SQLite with Write-Ahead Logging (`PRAGMA journal_mode = WAL;`), cascading foreign key constraints (`PRAGMA foreign_keys = ON;`), and busy timeout protection.
+- **Location & Configuration**: Defaults to `data/verdict.db`, configurable via the `DATABASE_PATH` or `DATABASE_URL` environment variable. The database file is strictly excluded from version control via `.gitignore`.
+- **Automated Initialization**: Tables (`verifications`, `claims`, `evidence`, `certificates`, `schema_migrations`) are created automatically and idempotently on application startup via FastAPI's lifespan event handler without requiring manual migration commands.
+- **Dual-Read Compatibility**: Certificate lookups check the SQLite database first for instant retrieval, seamlessly falling back to disk storage (`certificates/{id}.json`) for legacy certificates generated prior to database deployment.
+- **Privacy & Data Minimization**:
+  - Raw uploaded files are **never** stored in the database.
+  - API keys, credentials, client IP addresses, and sensitive environment variables are strictly excluded from storage.
+  - Persisted data is restricted to atomic claims, verified evidence snippets, relevance scores, and cryptographic certificate metadata.
+
+---
+
+## 20. Limitations
 
 - **Scanned Document OCR**: Pure raster image files (PNG, JPG, TIFF) and non-text scanned PDFs currently return a structured notice rather than attempting ungrounded character recognition.
 - **Encrypted Archives**: Password-protected PDF and Office documents must be decrypted before ingestion.
@@ -507,7 +532,7 @@ VERDICT applies defense-in-depth controls for document uploads, API inputs, and 
 
 ---
 
-## 20. Future Improvements
+## 21. Future Improvements
 
 - **Native OCR Engine**: Integration with open-source OCR libraries (e.g., Tesseract or PaddleOCR) for scanned PDFs and embedded document images.
 - **Citation Insertion**: Automatically injecting grounded inline footnote citations back into the original draft text.
@@ -518,7 +543,7 @@ VERDICT applies defense-in-depth controls for document uploads, API inputs, and 
 
 ## Testing & Quality Assurance
 
-Run the complete automated test suite (71 tests across unit, integration, and security layers):
+Run the complete automated test suite (86 tests across unit, integration, database persistence, and security layers):
 ```bash
 pytest -v tests/
 ```

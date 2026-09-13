@@ -21,6 +21,10 @@ data/processed/*
 data/vc_*_report.md
 certificates/*.json
 !certificates/.gitkeep
+*.db*
+*.sqlite*
+*.sqlite3*
+data/*.db*
 
 # Testing & Coverage
 .pytest_cache/

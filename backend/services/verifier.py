@@ -15,7 +15,7 @@ from backend.schemas import (
 )
 from backend.services.hashing import compute_sha256
 from backend.services.document_parser import parse_document
-from backend.services.claim_decomposer import decompose_draft
+from backend.services.claim_decomposer import decompose_draft, decompose_claims_list
 from backend.services.retriever import retrieve_evidence_for_claims
 from backend.services.entailment import get_entailment_engine
 from backend.services.certificate import create_certificate, save_certificate_to_disk
@@ -25,8 +25,8 @@ logger = logging.getLogger(__name__)
 
 class VerificationPipeline:
     """
-    End-to-End Evidence-Grounded Claim Verification Engine.
-    Coordinates document parsing with authority levels, claim decomposition,
+    End-to-end claim verification pipeline orchestrating document ingestion,
+    atomic claim decomposition, BAAI/bge-small-en-v1.5 embedding generation,
     authority-weighted semantic retrieval, cross-source conflict detection,
     performance tracking, and reproducible cryptographic certification.
     """
@@ -35,21 +35,26 @@ class VerificationPipeline:
 
     def run_verification(
         self,
-        draft_text: str,
-        source_files: List[Tuple[str, bytes]],
+        draft_text: str = "",
+        source_files: Optional[List[Tuple[str, bytes]]] = None,
         top_k: int = 3,
         similarity_threshold: float = 0.25,
         source_authorities: Optional[Dict[str, str]] = None,
         enable_authority_weighting: bool = True,
-        enable_conflict_detection: bool = True
+        enable_conflict_detection: bool = True,
+        claims: Optional[List[str]] = None
     ) -> VerificationCertificate:
         """
         Executes end-to-end verification.
         Gracefully handles empty inputs, unparseable files, edge cases, and authority assignments.
+        Supports both raw AI draft texts and pre-decomposed or explicit lists of claims.
         """
         start_time = time.perf_counter()
         sources_meta: List[SourceMetadata] = []
         all_chunks: List[SourceChunk] = []
+
+        if source_files is None:
+            source_files = []
 
         # 1. Parse each source document with authority attribution
         for filename, file_bytes in source_files:
@@ -72,14 +77,19 @@ class VerificationPipeline:
             except Exception as e:
                 logger.error(f"Error parsing source {filename}: {e}")
 
-        # 2. Decompose AI draft into atomic claims
-        draft_clean = (draft_text or "").strip()
-        input_hash = compute_sha256(draft_clean.encode("utf-8")) if draft_clean else None
-
-        if not draft_clean:
-            claims = []
+        # 2. Decompose AI draft into atomic claims or use supplied claims list
+        if claims is not None:
+            claims_objs = decompose_claims_list(claims)
+            draft_clean = (draft_text or "\n".join(claims)).strip()
         else:
-            claims = decompose_draft(draft_clean)
+            draft_clean = (draft_text or "").strip()
+            if not draft_clean:
+                claims_objs = []
+            else:
+                claims_objs = decompose_draft(draft_clean)
+
+        input_hash = compute_sha256(draft_clean.encode("utf-8")) if draft_clean else None
+        claims = claims_objs
 
         # 3. Retrieve evidence chunks for all claims with authority weighting
         retrieval_map = retrieve_evidence_for_claims(
@@ -190,5 +200,12 @@ class VerificationPipeline:
             save_certificate_to_disk(certificate)
         except Exception as e:
             logger.warning(f"Could not save certificate to disk: {e}")
+
+        # 9. Persist verification to SQLite database
+        try:
+            from backend.database.repository import save_verification
+            save_verification(certificate, draft_text=draft_clean)
+        except Exception as e:
+            logger.warning(f"Could not save verification to database: {e}")
 
         return certificate

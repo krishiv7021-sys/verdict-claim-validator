@@ -194,9 +194,32 @@ class VerifyResponse(BaseModel):
     error: Optional[str] = None
 
 
+class VerificationHistoryItem(BaseModel):
+    id: str
+    certificate_id: str
+    created_at: str
+    overall_status: str
+    claim_count: int
+    supported_count: int
+    refuted_count: int
+    unverified_count: int
+    conflicts_detected: int = 0
+    total_sources: int = 0
+    execution_time_seconds: float = 0.0
+    draft_snippet: Optional[str] = None
+
+
+class VerificationHistoryResponse(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    items: List[VerificationHistoryItem]
+
+
 class HealthResponse(BaseModel):
     status: str
     version: str = "1.0.0"
     embedding_model: str
     entailment_provider: str
+    database: str = "connected"
     timestamp: str

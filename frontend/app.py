@@ -13,7 +13,7 @@ if project_root not in sys.path:
 
 from backend.utils.helpers import SAMPLE_DEMO_AI_DRAFT, SAMPLE_DEMO_SOURCE_TEXT
 from backend.services.verifier import VerificationPipeline
-from backend.services.certificate import generate_human_readable_report
+from backend.services.certificate import generate_human_readable_report, load_certificate
 from backend.schemas import (
     SourceAuthorityLevel,
     AUTHORITY_WEIGHTS,
@@ -21,6 +21,12 @@ from backend.schemas import (
     VerificationCertificate
 )
 from evaluation.evaluate import get_or_run_benchmark, run_benchmark
+
+try:
+    from backend.database.repository import list_verifications, get_certificate_from_db
+except Exception:
+    list_verifications = None
+    get_certificate_from_db = None
 
 # Configuration
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
@@ -244,9 +250,343 @@ if "source_authorities_selection" not in st.session_state:
     st.session_state.source_authorities_selection = {}
 if "benchmark_results" not in st.session_state:
     st.session_state.benchmark_results = None
+if "history_inspected_cert" not in st.session_state:
+    st.session_state.history_inspected_cert = None
+if "inspecting_history_id" not in st.session_state:
+    st.session_state.inspecting_history_id = None
 
-# TOP LEVEL TABS: 1) Verification & Evidence Analysis, 2) Evaluation Dashboard
-tab_verify, tab_eval = st.tabs(["🔍 Verify Claims & Evidence", "📊 Evaluation Dashboard & Benchmarks"])
+
+def get_auth_badge_html(auth_str: str) -> str:
+    if not auth_str:
+        auth_str = "INTERNAL"
+    auth_upper = str(auth_str).upper()
+    if "STATUTORY" in auth_upper:
+        return '<span class="authority-badge auth-statutory">🏛️ STATUTORY [1.00]</span>'
+    elif "POLICY" in auth_upper:
+        return '<span class="authority-badge auth-policy">📜 POLICY [0.97]</span>'
+    elif "REFERENCE" in auth_upper:
+        return '<span class="authority-badge auth-reference">🌐 REFERENCE [0.90]</span>'
+    else:
+        return '<span class="authority-badge auth-internal">🏢 INTERNAL [0.94]</span>'
+
+
+def render_verification_results(cert: dict, key_prefix: str = "verify_"):
+    summary = cert.get("summary", {})
+    claims = cert.get("claims", [])
+    overall_verdict = cert.get("overall_verdict", "REVIEW_REQUIRED")
+    cert_id = cert.get("certificate_id", "N/A")
+    conflicts_count = summary.get("conflicts_detected", 0)
+
+    st.markdown("### Executive Verification Summary")
+
+    # Overall Verdict Badge & KPI Metrics
+    col_verdict, col_total, col_sup, col_ref, col_unv, col_conf = st.columns([2, 1, 1, 1, 1, 1])
+
+    with col_verdict:
+        if overall_verdict == "VERIFIED":
+            st.markdown("""
+            <div style="background: #064e3b; border: 1px solid #059669; padding: 16px; border-radius: 10px;">
+                <span style="font-size: 0.8rem; color: #a7f3d0; text-transform: uppercase; font-weight: 700;">OVERALL STATUS</span>
+                <h2 style="margin: 4px 0 0 0; color: #34d399; font-weight: 800;">🟢 VERIFIED</h2>
+                <small style="color: #6ee7b7;">All claims grounded in verified evidence.</small>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            conflict_note = "Conflicting evidence detected across sources." if conflicts_count > 0 else "One or more claims are refuted or unverified."
+            st.markdown(f"""
+            <div style="background: #450a0a; border: 1px solid #dc2626; padding: 16px; border-radius: 10px;">
+                <span style="font-size: 0.8rem; color: #fecaca; text-transform: uppercase; font-weight: 700;">OVERALL STATUS</span>
+                <h2 style="margin: 4px 0 0 0; color: #f87171; font-weight: 800;">🔴 REVIEW REQUIRED</h2>
+                <small style="color: #fca5a5;">{conflict_note}</small>
+            </div>
+            """, unsafe_allow_html=True)
+
+    with col_total:
+        st.metric("Total Claims", summary.get("total_claims", 0))
+    with col_sup:
+        st.metric("Supported", summary.get("supported", 0), delta="Evidence Found", delta_color="normal")
+    with col_ref:
+        st.metric("Refuted", summary.get("refuted", 0), delta="Contradiction", delta_color="inverse")
+    with col_unv:
+        st.metric("Unverified", summary.get("unverified", 0), delta="Inconclusive", delta_color="off")
+    with col_conf:
+        st.metric(
+            "Source Conflicts",
+            conflicts_count,
+            delta=f"{conflicts_count} Conflict(s)" if conflicts_count > 0 else "None",
+            delta_color="inverse" if conflicts_count > 0 else "normal"
+        )
+
+    # Performance banner
+    tot_time = summary.get("total_time_seconds", 0.0)
+    avg_ms = summary.get("avg_time_per_claim_ms", 0.0)
+    st.caption(f"⚡ **Verification Performance**: Total Pipeline Time: **{tot_time:.3f}s** | Average Claim Latency: **{avg_ms:.1f}ms**")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # TWO COLUMN REVIEW INTERFACE
+    st.markdown("### Claim Review & Evidence Deep-Dive")
+    st.caption("Click on any atomic claim below to inspect its exact source evidence span, retrieval score, and entailment rationale.")
+
+    claim_sel_key = f"{key_prefix}selected_claim_id"
+    valid_cids = [c["claim_id"] for c in claims if "claim_id" in c]
+    if claim_sel_key not in st.session_state or st.session_state[claim_sel_key] not in valid_cids:
+        if st.session_state.get("selected_claim_id") in valid_cids:
+            st.session_state[claim_sel_key] = st.session_state["selected_claim_id"]
+        else:
+            st.session_state[claim_sel_key] = valid_cids[0] if valid_cids else None
+
+    col_claims_list, col_evidence_detail = st.columns([1, 1])
+
+    with col_claims_list:
+        st.markdown("#### 📋 Extracted Atomic Claims")
+        
+        for c in claims:
+            cid = c["claim_id"]
+            verdict = c["verdict"]
+            text = c.get("claim_text") or c.get("text", "")
+            has_conflict = c.get("conflict_detected", False)
+
+            if has_conflict:
+                v_badge = "⚠️ CONFLICT"
+            elif verdict == "SUPPORTED":
+                v_badge = "🟢 SUPPORTED"
+            elif verdict == "REFUTED":
+                v_badge = "🔴 REFUTED"
+            else:
+                v_badge = "🟡 UNVERIFIED"
+
+            is_selected = (st.session_state.get(claim_sel_key) == cid)
+            btn_prefix = "👉 " if is_selected else ""
+            btn_label = f"{btn_prefix}[{cid}] {v_badge} — {text[:50]}..."
+            
+            if st.button(btn_label, key=f"{key_prefix}btn_{cid}", use_container_width=True, type="primary" if is_selected else "secondary"):
+                st.session_state[claim_sel_key] = cid
+                if key_prefix == "verify_":
+                    st.session_state.selected_claim_id = cid
+                st.rerun()
+
+    # Find the currently selected claim
+    selected_claim = next((c for c in claims if c["claim_id"] == st.session_state.get(claim_sel_key)), claims[0] if claims else None)
+
+    with col_evidence_detail:
+        if selected_claim:
+            cid = selected_claim["claim_id"]
+            verdict = selected_claim["verdict"]
+            c_text = selected_claim.get("claim_text") or selected_claim.get("text", "")
+            reason = selected_claim.get("explanation") or selected_claim.get("reason", "")
+            conf = selected_claim.get("confidence", 0.0)
+            sim_score = selected_claim.get("similarity_score") or selected_claim.get("retrieval_score", 0.0)
+            rank_score = selected_claim.get("ranking_score", sim_score)
+            src_auth = selected_claim.get("source_authority", DEFAULT_AUTHORITY_LEVEL)
+            has_conflict = selected_claim.get("conflict_detected", False)
+            claim_ms = selected_claim.get("processing_time_ms", 0.0)
+
+            st.markdown(f"#### 🔎 Evidence Inspector: `{cid}`")
+
+            # Verdict Status Callout
+            if has_conflict:
+                st.error(f"**VERDICT: REVIEW REQUIRED — CONFLICT DETECTED** (Confidence: {conf:.2f} | Latency: {claim_ms:.1f}ms)")
+            elif verdict == "SUPPORTED":
+                st.success(f"**VERDICT: SUPPORTED** (Confidence: {conf:.2f} | Latency: {claim_ms:.1f}ms)")
+            elif verdict == "REFUTED":
+                st.error(f"**VERDICT: REFUTED** — Review Required! (Confidence: {conf:.2f} | Latency: {claim_ms:.1f}ms)")
+            else:
+                st.warning(f"**VERDICT: UNVERIFIED** — Inconclusive or Missing Evidence (Confidence: {conf:.2f} | Latency: {claim_ms:.1f}ms)")
+
+            # AI Claim
+            st.markdown(f"**AI Claim:**\n> *\"{c_text}\"*")
+            
+            # Rationale
+            st.markdown(f"**Entailment Rationale:**\n{reason}")
+
+            # If Conflict Detected, Show Conflict Alert & Primary vs Conflicting Evidence
+            if has_conflict:
+                st.markdown("""
+                <div style="background: #450a0a; border: 1px solid #dc2626; padding: 12px 16px; border-radius: 8px; margin: 12px 0;">
+                    <h4 style="margin: 0; color: #fca5a5; font-size: 0.95rem;">⚠️ Conflicting Evidence Detected Across Sources</h4>
+                    <p style="margin: 4px 0 0 0; color: #fecaca; font-size: 0.85rem;">
+                        Multiple ground-truth documents contain contradictory facts regarding this claim. Human review is required.
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+
+                primary_ev = selected_claim.get("primary_evidence")
+                supporting_evs = selected_claim.get("supporting_evidence", [])
+                conflicting_evs = selected_claim.get("conflicting_evidence", [])
+
+                # Render Corroborating / Supporting Evidence Candidate(s)
+                display_supp = supporting_evs if supporting_evs else ([primary_ev] if primary_ev else [])
+                if display_supp:
+                    st.markdown("##### 🟢 Corroborating Evidence Candidate (Affirms Claim):")
+                    for s_ev in display_supp:
+                        s_auth = s_ev.get("authority_level", DEFAULT_AUTHORITY_LEVEL)
+                        s_text_esc = html.escape(str(s_ev.get('text', '')))
+                        s_src_esc = html.escape(str(s_ev.get('source', '')))
+                        s_loc_esc = html.escape(str(s_ev.get('location') or (f"Page {s_ev.get('page')}" if s_ev.get('page') else "N/A")))
+                        s_sim = s_ev.get('similarity', 0.0)
+                        s_rank = s_ev.get('ranking_score', s_sim)
+                        st.markdown(f"""
+                        <div class="evidence-box" style="border-left: 4px solid #10b981;">
+                            <p style="margin: 0; font-style: italic; color: #f8fafc;">
+                                "{s_text_esc}"
+                            </p>
+                            <div style="margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+                                <span class="source-meta-tag" style="border: 1px solid #065f46; color: #6ee7b7;">📄 {s_src_esc}</span>
+                                {get_auth_badge_html(s_auth)}
+                                <span class="source-meta-tag">📍 {s_loc_esc}</span>
+                                <span class="source-meta-tag">🎯 Similarity: {s_sim:.2f}</span>
+                                <span class="source-meta-tag">⚡ Ranking: {s_rank:.2f}</span>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                # Render Contradicting / Conflicting Evidence Passage(s)
+                if conflicting_evs:
+                    st.markdown("##### 🔴 Contradicting Evidence Candidate (Refutes Claim):")
+                    for c_ev in conflicting_evs:
+                        c_auth = c_ev.get("authority_level", DEFAULT_AUTHORITY_LEVEL)
+                        c_text_esc = html.escape(str(c_ev.get('text', '')))
+                        c_src_esc = html.escape(str(c_ev.get('source', '')))
+                        c_loc_esc = html.escape(str(c_ev.get('location') or (f"Page {c_ev.get('page')}" if c_ev.get('page') else "N/A")))
+                        c_sim = c_ev.get('similarity', 0.0)
+                        c_rank = c_ev.get('ranking_score', c_sim)
+                        st.markdown(f"""
+                        <div class="conflict-evidence-box">
+                            <p style="margin: 0; font-style: italic; color: #fecaca;">
+                                "{c_text_esc}"
+                            </p>
+                            <div style="margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+                                <span class="source-meta-tag" style="border: 1px solid #7f1d1d; color: #fca5a5;">📄 {c_src_esc}</span>
+                                {get_auth_badge_html(c_auth)}
+                                <span class="source-meta-tag">📍 {c_loc_esc}</span>
+                                <span class="source-meta-tag">🎯 Similarity: {c_sim:.2f}</span>
+                                <span class="source-meta-tag">⚡ Ranking: {c_rank:.2f}</span>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                # All Candidates Expander for full transparency
+                evidence_list = selected_claim.get("evidence", [])
+                if len(evidence_list) > 1:
+                    with st.expander(f"View all {len(evidence_list)} candidate evidence chunks across sources"):
+                        for ev in evidence_list:
+                            ev_loc = ev.get('location') or (f"Page {ev.get('page')}" if ev.get('page') else "N/A")
+                            st.markdown(f"- *\"{ev.get('text')}\"*")
+                            st.caption(f"Source: `{ev.get('source')}` ({ev_loc}) | Authority: `{ev.get('authority_level')}` | Similarity: {ev.get('similarity', 0.0):.2f} | Ranking: {ev.get('ranking_score', 0.0):.2f}")
+
+            else:
+                # Standard Evidence Span Details
+                st.markdown("##### 📌 Ground-Truth Evidence Grounding:")
+                evidence_list = selected_claim.get("evidence", [])
+                if evidence_list:
+                    top_ev = evidence_list[0]
+                    loc_type = top_ev.get('location_type') or "location"
+                    loc_val = top_ev.get('location') or (f"Page {top_ev.get('page')}" if top_ev.get('page') else "N/A")
+                    file_fmt = str(top_ev.get('file_type') or top_ev.get('source', '').split('.')[-1]).upper()
+                    top_auth = top_ev.get('authority_level', src_auth)
+                    top_text_esc = html.escape(str(top_ev.get('text', '')))
+                    top_src_esc = html.escape(str(top_ev.get('source', '')))
+                    top_loc_esc = html.escape(str(loc_val))
+
+                    st.markdown(f"""
+                    <div class="evidence-box">
+                        <p style="margin: 0; font-style: italic; color: #f8fafc;">
+                            "{top_text_esc}"
+                        </p>
+                        <div style="margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+                            <span class="source-meta-tag">📄 Source: {top_src_esc}</span>
+                            {get_auth_badge_html(top_auth)}
+                            <span class="source-meta-tag">🏷️ Format: {file_fmt}</span>
+                            <span class="source-meta-tag">📍 {loc_type.capitalize()}: {top_loc_esc}</span>
+                            <span class="source-meta-tag">🎯 Similarity: {top_ev.get('similarity', 0.0):.2f}</span>
+                            <span class="source-meta-tag">⚡ Ranking: {top_ev.get('ranking_score', top_ev.get('similarity', 0.0)):.2f}</span>
+                            <span class="source-meta-tag">🆔 Chunk: {top_ev.get('chunk_id', 'N/A')}</span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                    if len(evidence_list) > 1:
+                        with st.expander(f"View {len(evidence_list)-1} other candidate passages"):
+                            for ev in evidence_list[1:]:
+                                ev_loc = ev.get('location') or (f"Page {ev.get('page')}" if ev.get('page') else "")
+                                st.markdown(f"- *\"{ev.get('text')}\"*")
+                                st.caption(f"Source: `{ev.get('source')}` ({ev_loc}) | Authority: `{ev.get('authority_level')}` | Similarity: {ev.get('similarity', 0.0):.2f} | Ranking: {ev.get('ranking_score', 0.0):.2f}")
+                else:
+                    st.info("No matching evidence passages retrieved from source documents.")
+        else:
+            st.info("Select a claim from the left panel to inspect grounding evidence.")
+
+    # CERTIFICATE & AUDIT TRAIL SECTION
+    st.markdown("---")
+    st.markdown("### Cryptographic Verification Certificate")
+    st.caption("A tamper-evident, machine-readable audit trail anchoring verified claims to source document SHA-256 hashes.")
+
+    cert_col1, cert_col2 = st.columns([2, 1])
+
+    with cert_col1:
+        st.markdown(f"**Certificate ID**: `{cert_id}`")
+        st.markdown(f"**Verification Timestamp**: `{cert.get('timestamp')}`")
+        st.markdown(f"**Input Hash (SHA-256)**: `{cert.get('input_hash', 'N/A')}`")
+        st.markdown(f"**Embedding Model**: `{cert.get('configuration', {}).get('embedding_model', 'BAAI/bge-small-en-v1.5')}`")
+        st.markdown(f"**Entailment Engine**: `{cert.get('configuration', {}).get('entailment_provider', 'heuristic_fallback')}`")
+        st.markdown(f"**Execution Latency**: `{cert.get('execution_time_seconds', summary.get('total_time_seconds', 0.0)):.3f}s` (Avg `{summary.get('avg_time_per_claim_ms', 0.0):.1f}ms`/claim)")
+
+        # Source Document Hashes
+        st.markdown("##### 🔐 Source Integrity Audit:")
+        sources = cert.get("sources", [])
+        if sources:
+            source_table = [
+                {
+                    "Filename": s["filename"],
+                    "Authority Tier": s.get("authority_level", DEFAULT_AUTHORITY_LEVEL),
+                    "Weight": f"{s.get('authority_weight', 0.94):.2f}",
+                    "Format": str(s.get("file_type", "doc")).upper(),
+                    "SHA-256 Checksum": f"{s['sha256'][:20]}...",
+                    "Evidence Scope": f"{len(s.get('evidence_locations', []))} location(s)" if s.get('evidence_locations') else f"{s.get('page_count', 1)} page(s)"
+                }
+                for s in sources
+            ]
+            st.table(source_table)
+        else:
+            st.caption("No source files hashed.")
+
+    with cert_col2:
+        st.markdown("##### 📥 Export Artifacts")
+        
+        # Download JSON Certificate
+        cert_json_str = json.dumps(cert, indent=2)
+        st.download_button(
+            label="📄 Download JSON Certificate",
+            data=cert_json_str,
+            file_name=f"{cert_id}.json",
+            mime="application/json",
+            use_container_width=True,
+            key=f"{key_prefix}download_cert"
+        )
+
+        # Generate & Download Human-Readable Markdown Report
+        try:
+            cert_obj = VerificationCertificate.model_validate(cert)
+            report_md = generate_human_readable_report(cert_obj)
+        except Exception:
+            report_md = f"# Verification Report\nCertificate ID: {cert_id}\nOverall Verdict: {overall_verdict}"
+
+        st.download_button(
+            label="📝 Download Human-Readable Report",
+            data=report_md,
+            file_name=f"{cert_id}_report.md",
+            mime="text/markdown",
+            use_container_width=True,
+            key=f"{key_prefix}download_report"
+        )
+
+    with st.expander("🔍 View Raw JSON Certificate"):
+        st.json(cert)
+
+
+# TOP LEVEL TABS: 1) Verification & Evidence Analysis, 2) Verification History, 3) Evaluation Dashboard
+tab_verify, tab_history, tab_eval = st.tabs(["🔍 Verify Claims & Evidence", "📜 Verification History", "📊 Evaluation Dashboard & Benchmarks"])
 
 with tab_verify:
     # Quick Demo Mode Toggle
@@ -271,11 +611,12 @@ with tab_verify:
             st.session_state.draft_input = draft_upload.read().decode("utf-8", errors="replace")
 
         draft_text = st.text_area(
-            "AI-generated text or answer to verify:",
+            "AI-generated text or claims to verify:",
             value=st.session_state.draft_input,
             height=220,
-            placeholder="Paste your AI-generated response, summary, or claims here..."
+            placeholder="Paste your AI-generated response, summary, newline-separated claims, or JSON array ['claim 1', 'claim 2']..."
         )
+        st.caption("💡 **Input Support:** Full paragraphs, newline-separated claims, numbered lists (`1. ...`), or JSON list format (`['claim 1', 'claim 2']`).")
 
     with col_sources:
         st.markdown("#### 📚 Ground-Truth Source Documents")
@@ -377,6 +718,9 @@ with tab_verify:
                         "draft_text": final_draft,
                         "source_authorities": json.dumps(authorities_payload)
                     }
+                    if (final_draft.startswith("[") and final_draft.endswith("]")) or final_draft.startswith("claims ="):
+                        clean_json = re.sub(r"^claims\s*=\s*", "", final_draft).strip()
+                        form_data["claims"] = clean_json
 
                     resp = requests.post(
                         f"{BACKEND_URL}/verify",
@@ -415,308 +759,167 @@ with tab_verify:
                 if cert_data:
                     st.session_state.verification_result = cert_data
                     st.session_state.selected_claim_id = cert_data["claims"][0]["claim_id"] if cert_data.get("claims") else None
+                    st.session_state["verify_selected_claim_id"] = st.session_state.selected_claim_id
                     st.toast("Verification Complete! Certificate Generated.", icon="✅")
 
 
     # DISPLAY VERIFICATION RESULTS
     if st.session_state.verification_result:
-        cert = st.session_state.verification_result
-        summary = cert.get("summary", {})
-        claims = cert.get("claims", [])
-        overall_verdict = cert.get("overall_verdict", "REVIEW_REQUIRED")
-        cert_id = cert.get("certificate_id", "N/A")
-        conflicts_count = summary.get("conflicts_detected", 0)
-
         st.markdown("---")
-        st.markdown("### 2. Executive Verification Summary")
+        render_verification_results(st.session_state.verification_result, key_prefix="verify_")
 
-        # Overall Verdict Badge & KPI Metrics
-        col_verdict, col_total, col_sup, col_ref, col_unv, col_conf = st.columns([2, 1, 1, 1, 1, 1])
 
-        with col_verdict:
-            if overall_verdict == "VERIFIED":
-                st.markdown("""
-                <div style="background: #064e3b; border: 1px solid #059669; padding: 16px; border-radius: 10px;">
-                    <span style="font-size: 0.8rem; color: #a7f3d0; text-transform: uppercase; font-weight: 700;">OVERALL STATUS</span>
-                    <h2 style="margin: 4px 0 0 0; color: #34d399; font-weight: 800;">🟢 VERIFIED</h2>
-                    <small style="color: #6ee7b7;">All claims grounded in verified evidence.</small>
+# TAB 2: VERIFICATION HISTORY & AUDIT RECORDS
+with tab_history:
+    st.markdown("### 📜 Verification History & Audit Records")
+    st.caption("Persistent record of previous verification runs, claim metrics, and tamper-evident certificates.")
+
+    col_h_header, col_h_refresh = st.columns([4, 1])
+    with col_h_refresh:
+        if st.button("🔄 Refresh History", use_container_width=True, key="btn_refresh_history"):
+            st.rerun()
+
+    # Active Inspection Panel (renders if user clicked Inspect on any history record)
+    inspected_cert = st.session_state.get("history_inspected_cert")
+    inspected_id = st.session_state.get("inspecting_history_id")
+    if inspected_cert:
+        insp_cert_id = inspected_cert.get("certificate_id", "N/A")
+        st.markdown(f"""
+        <div style="background: #0f172a; border: 1px solid #3b82f6; border-radius: 10px; padding: 14px 20px; margin: 12px 0 16px 0;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <span style="font-size: 0.75rem; color: #93c5fd; text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px;">🔍 ACTIVE INSPECTION</span>
+                    <h3 style="margin: 2px 0 0 0; color: #60a5fa; font-family: monospace; font-size: 1.3rem;">{html.escape(insp_cert_id)}</h3>
                 </div>
-                """, unsafe_allow_html=True)
-            else:
-                conflict_note = "Conflicting evidence detected across sources." if conflicts_count > 0 else "One or more claims are refuted or unverified."
-                st.markdown(f"""
-                <div style="background: #450a0a; border: 1px solid #dc2626; padding: 16px; border-radius: 10px;">
-                    <span style="font-size: 0.8rem; color: #fecaca; text-transform: uppercase; font-weight: 700;">OVERALL STATUS</span>
-                    <h2 style="margin: 4px 0 0 0; color: #f87171; font-weight: 800;">🔴 REVIEW REQUIRED</h2>
-                    <small style="color: #fca5a5;">{conflict_note}</small>
-                </div>
-                """, unsafe_allow_html=True)
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
-        with col_total:
-            st.metric("Total Claims", summary.get("total_claims", 0))
-        with col_sup:
-            st.metric("Supported", summary.get("supported", 0), delta="Evidence Found", delta_color="normal")
-        with col_ref:
-            st.metric("Refuted", summary.get("refuted", 0), delta="Contradiction", delta_color="inverse")
-        with col_unv:
-            st.metric("Unverified", summary.get("unverified", 0), delta="Inconclusive", delta_color="off")
-        with col_conf:
-            st.metric(
-                "Source Conflicts",
-                conflicts_count,
-                delta=f"{conflicts_count} Conflict(s)" if conflicts_count > 0 else "None",
-                delta_color="inverse" if conflicts_count > 0 else "normal"
-            )
+        col_insp_info, col_insp_close = st.columns([4, 1])
+        with col_insp_info:
+            st.info(f"Viewing historical verification audit trail for certificate `{insp_cert_id}`. You can also view this in the **Verify Claims & Evidence** tab.")
+        with col_insp_close:
+            if st.button("✖️ Close Inspection", key="btn_close_inspection", use_container_width=True):
+                st.session_state.history_inspected_cert = None
+                st.session_state.inspecting_history_id = None
+                st.rerun()
 
-        # Performance banner
-        tot_time = summary.get("total_time_seconds", 0.0)
-        avg_ms = summary.get("avg_time_per_claim_ms", 0.0)
-        st.caption(f"⚡ **Verification Performance**: Total Pipeline Time: **{tot_time:.3f}s** | Average Claim Latency: **{avg_ms:.1f}ms**")
-
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        # TWO COLUMN REVIEW INTERFACE
-        st.markdown("### 3. Claim Review & Evidence Deep-Dive")
-        st.caption("Click on any atomic claim below to inspect its exact source evidence span, retrieval score, and entailment rationale.")
-
-        col_claims_list, col_evidence_detail = st.columns([1, 1])
-
-        with col_claims_list:
-            st.markdown("#### 📋 Extracted Atomic Claims")
-            
-            for c in claims:
-                cid = c["claim_id"]
-                verdict = c["verdict"]
-                text = c.get("claim_text") or c["text"]
-                has_conflict = c.get("conflict_detected", False)
-
-                if has_conflict:
-                    v_badge = "⚠️ CONFLICT"
-                elif verdict == "SUPPORTED":
-                    v_badge = "🟢 SUPPORTED"
-                elif verdict == "REFUTED":
-                    v_badge = "🔴 REFUTED"
-                else:
-                    v_badge = "🟡 UNVERIFIED"
-
-                is_selected = (st.session_state.selected_claim_id == cid)
-                btn_label = f"[{cid}] {v_badge} — {text[:55]}..."
-                
-                if st.button(btn_label, key=f"btn_{cid}", use_container_width=True):
-                    st.session_state.selected_claim_id = cid
-                    st.rerun()
-
-        # Find the currently selected claim
-        selected_claim = next((c for c in claims if c["claim_id"] == st.session_state.selected_claim_id), claims[0] if claims else None)
-
-        with col_evidence_detail:
-            if selected_claim:
-                cid = selected_claim["claim_id"]
-                verdict = selected_claim["verdict"]
-                c_text = selected_claim.get("claim_text") or selected_claim["text"]
-                reason = selected_claim.get("explanation") or selected_claim.get("reason", "")
-                conf = selected_claim.get("confidence", 0.0)
-                sim_score = selected_claim.get("similarity_score") or selected_claim.get("retrieval_score", 0.0)
-                rank_score = selected_claim.get("ranking_score", sim_score)
-                src_auth = selected_claim.get("source_authority", DEFAULT_AUTHORITY_LEVEL)
-                has_conflict = selected_claim.get("conflict_detected", False)
-                claim_ms = selected_claim.get("processing_time_ms", 0.0)
-
-                st.markdown(f"#### 🔎 Evidence Inspector: `{cid}`")
-
-                # Verdict Status Callout
-                if has_conflict:
-                    st.error(f"**VERDICT: REVIEW REQUIRED — CONFLICT DETECTED** (Confidence: {conf:.2f} | Latency: {claim_ms:.1f}ms)")
-                elif verdict == "SUPPORTED":
-                    st.success(f"**VERDICT: SUPPORTED** (Confidence: {conf:.2f} | Latency: {claim_ms:.1f}ms)")
-                elif verdict == "REFUTED":
-                    st.error(f"**VERDICT: REFUTED** — Review Required! (Confidence: {conf:.2f} | Latency: {claim_ms:.1f}ms)")
-                else:
-                    st.warning(f"**VERDICT: UNVERIFIED** — Inconclusive or Missing Evidence (Confidence: {conf:.2f} | Latency: {claim_ms:.1f}ms)")
-
-                # AI Claim
-                st.markdown(f"**AI Claim:**\n> *\"{c_text}\"*")
-                
-                # Rationale
-                st.markdown(f"**Entailment Rationale:**\n{reason}")
-
-                # Authority Helper Badge
-                def get_auth_badge_html(auth_str):
-                    if "STATUTORY" in auth_str:
-                        return f'<span class="authority-badge auth-statutory">🏛️ STATUTORY [1.00]</span>'
-                    elif "POLICY" in auth_str:
-                        return f'<span class="authority-badge auth-policy">📜 POLICY [0.97]</span>'
-                    elif "REFERENCE" in auth_str:
-                        return f'<span class="authority-badge auth-reference">🌐 REFERENCE [0.90]</span>'
-                    else:
-                        return f'<span class="authority-badge auth-internal">🏢 INTERNAL [0.94]</span>'
-
-                # If Conflict Detected, Show Conflict Alert & Primary vs Conflicting Evidence
-                if has_conflict:
-                    st.markdown("""
-                    <div style="background: #450a0a; border: 1px solid #dc2626; padding: 12px 16px; border-radius: 8px; margin: 12px 0;">
-                        <h4 style="margin: 0; color: #fca5a5; font-size: 0.95rem;">⚠️ Conflicting Evidence Detected Across Sources</h4>
-                        <p style="margin: 4px 0 0 0; color: #fecaca; font-size: 0.85rem;">
-                            Multiple ground-truth documents contain contradictory facts regarding this claim. Human review is required.
-                        </p>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                    primary_ev = selected_claim.get("primary_evidence")
-                    conflicting_evs = selected_claim.get("conflicting_evidence", [])
-
-                    if primary_ev:
-                        p_auth = primary_ev.get("authority_level", DEFAULT_AUTHORITY_LEVEL)
-                        p_text_esc = html.escape(str(primary_ev.get('text', '')))
-                        p_src_esc = html.escape(str(primary_ev.get('source', '')))
-                        p_loc_esc = html.escape(str(primary_ev.get('location', 'Page 1')))
-                        st.markdown("##### 📌 Primary Evidence Candidate:")
-                        st.markdown(f"""
-                        <div class="evidence-box">
-                            <p style="margin: 0; font-style: italic; color: #f8fafc;">
-                                "{p_text_esc}"
-                            </p>
-                            <div style="margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
-                                <span class="source-meta-tag">📄 {p_src_esc}</span>
-                                {get_auth_badge_html(p_auth)}
-                                <span class="source-meta-tag">📍 {p_loc_esc}</span>
-                                <span class="source-meta-tag">🎯 Similarity: {primary_ev.get('similarity', 0.0):.2f}</span>
-                                <span class="source-meta-tag">⚡ Ranking: {primary_ev.get('ranking_score', primary_ev.get('similarity', 0.0)):.2f}</span>
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                    if conflicting_evs:
-                        st.markdown("##### 🔴 Contradicting Evidence Passages:")
-                        for c_ev in conflicting_evs:
-                            c_auth = c_ev.get("authority_level", DEFAULT_AUTHORITY_LEVEL)
-                            c_text_esc = html.escape(str(c_ev.get('text', '')))
-                            c_src_esc = html.escape(str(c_ev.get('source', '')))
-                            c_loc_esc = html.escape(str(c_ev.get('location', 'Page 1')))
-                            st.markdown(f"""
-                            <div class="conflict-evidence-box">
-                                <p style="margin: 0; font-style: italic; color: #fecaca;">
-                                    "{c_text_esc}"
-                                </p>
-                                <div style="margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
-                                    <span class="source-meta-tag" style="border: 1px solid #7f1d1d;">📄 {c_src_esc}</span>
-                                    {get_auth_badge_html(c_auth)}
-                                    <span class="source-meta-tag">📍 {c_loc_esc}</span>
-                                    <span class="source-meta-tag">🎯 Similarity: {c_ev.get('similarity', 0.0):.2f}</span>
-                                </div>
-                            </div>
-                            """, unsafe_allow_html=True)
-
-                else:
-                    # Standard Evidence Span Details
-                    st.markdown("##### 📌 Ground-Truth Evidence Grounding:")
-                    evidence_list = selected_claim.get("evidence", [])
-                    if evidence_list:
-                        top_ev = evidence_list[0]
-                        loc_type = top_ev.get('location_type') or "location"
-                        loc_val = top_ev.get('location') or (f"Page {top_ev.get('page')}" if top_ev.get('page') else "N/A")
-                        file_fmt = str(top_ev.get('file_type') or top_ev.get('source', '').split('.')[-1]).upper()
-                        top_auth = top_ev.get('authority_level', src_auth)
-                        top_text_esc = html.escape(str(top_ev.get('text', '')))
-                        top_src_esc = html.escape(str(top_ev.get('source', '')))
-                        top_loc_esc = html.escape(str(loc_val))
-
-                        st.markdown(f"""
-                        <div class="evidence-box">
-                            <p style="margin: 0; font-style: italic; color: #f8fafc;">
-                                "{top_text_esc}"
-                            </p>
-                            <div style="margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
-                                <span class="source-meta-tag">📄 Source: {top_src_esc}</span>
-                                {get_auth_badge_html(top_auth)}
-                                <span class="source-meta-tag">🏷️ Format: {file_fmt}</span>
-                                <span class="source-meta-tag">📍 {loc_type.capitalize()}: {top_loc_esc}</span>
-                                <span class="source-meta-tag">🎯 Similarity: {top_ev.get('similarity', 0.0):.2f}</span>
-                                <span class="source-meta-tag">⚡ Ranking: {top_ev.get('ranking_score', top_ev.get('similarity', 0.0)):.2f}</span>
-                                <span class="source-meta-tag">🆔 Chunk: {top_ev.get('chunk_id', 'N/A')}</span>
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-
-                        if len(evidence_list) > 1:
-                            with st.expander(f"View {len(evidence_list)-1} other candidate passages"):
-                                for ev in evidence_list[1:]:
-                                    ev_loc = ev.get('location') or (f"Page {ev.get('page')}" if ev.get('page') else "")
-                                    st.markdown(f"- *\"{ev.get('text')}\"*")
-                                    st.caption(f"Source: `{ev.get('source')}` ({ev_loc}) | Authority: `{ev.get('authority_level')}` | Similarity: {ev.get('similarity', 0.0):.2f} | Ranking: {ev.get('ranking_score', 0.0):.2f}")
-                    else:
-                        st.info("No matching evidence passages retrieved from source documents.")
-            else:
-                st.info("Select a claim from the left panel to inspect grounding evidence.")
-
-        # CERTIFICATE & AUDIT TRAIL SECTION
+        render_verification_results(inspected_cert, key_prefix="hist_")
         st.markdown("---")
-        st.markdown("### 4. Cryptographic Verification Certificate")
-        st.caption("A tamper-evident, machine-readable audit trail anchoring verified claims to source document SHA-256 hashes.")
+        st.markdown("#### 📜 All Stored Verification Records")
 
-        cert_col1, cert_col2 = st.columns([2, 1])
+    # Fetch verification history
+    history_items = []
+    total_history_count = 0
+    fetch_error = None
 
-        with cert_col1:
-            st.markdown(f"**Certificate ID**: `{cert_id}`")
-            st.markdown(f"**Verification Timestamp**: `{cert.get('timestamp')}`")
-            st.markdown(f"**Input Hash (SHA-256)**: `{cert.get('input_hash', 'N/A')}`")
-            st.markdown(f"**Embedding Model**: `{cert.get('configuration', {}).get('embedding_model', 'BAAI/bge-small-en-v1.5')}`")
-            st.markdown(f"**Entailment Engine**: `{cert.get('configuration', {}).get('entailment_provider', 'heuristic_fallback')}`")
-            st.markdown(f"**Execution Latency**: `{cert.get('execution_time_seconds', summary.get('total_time_seconds', 0.0)):.3f}s` (Avg `{summary.get('avg_time_per_claim_ms', 0.0):.1f}ms`/claim)")
-
-            # Source Document Hashes
-            st.markdown("##### 🔐 Source Integrity Audit:")
-            sources = cert.get("sources", [])
-            if sources:
-                source_table = [
-                    {
-                        "Filename": s["filename"],
-                        "Authority Tier": s.get("authority_level", DEFAULT_AUTHORITY_LEVEL),
-                        "Weight": f"{s.get('authority_weight', 0.94):.2f}",
-                        "Format": str(s.get("file_type", "doc")).upper(),
-                        "SHA-256 Checksum": f"{s['sha256'][:20]}...",
-                        "Evidence Scope": f"{len(s.get('evidence_locations', []))} location(s)" if s.get('evidence_locations') else f"{s.get('page_count', 1)} page(s)"
-                    }
-                    for s in sources
-                ]
-                st.table(source_table)
-            else:
-                st.caption("No source files hashed.")
-
-        with cert_col2:
-            st.markdown("##### 📥 Export Artifacts")
-            
-            # Download JSON Certificate
-            cert_json_str = json.dumps(cert, indent=2)
-            st.download_button(
-                label="📄 Download JSON Certificate",
-                data=cert_json_str,
-                file_name=f"{cert_id}.json",
-                mime="application/json",
-                use_container_width=True
-            )
-
-            # Generate & Download Human-Readable Markdown Report
+    try:
+        resp = requests.get(f"{BACKEND_URL}/verifications?limit=30", timeout=1.5)
+        if resp.status_code == 200:
+            h_data = resp.json()
+            history_items = h_data.get("items", [])
+            total_history_count = h_data.get("total", len(history_items))
+        else:
+            fetch_error = f"Backend returned HTTP {resp.status_code}"
+    except Exception as e:
+        # Fallback to direct DB query if backend server is not running
+        if list_verifications:
             try:
-                cert_obj = VerificationCertificate.model_validate(cert)
-                report_md = generate_human_readable_report(cert_obj)
-            except Exception:
-                report_md = f"# Verification Report\nCertificate ID: {cert_id}\nOverall Verdict: {overall_verdict}"
+                history_items = list_verifications(limit=30)
+                from backend.database.repository import get_verification_count
+                total_history_count = get_verification_count()
+            except Exception as dbe:
+                fetch_error = f"Database read error: {dbe}"
+        else:
+            fetch_error = str(e)
 
-            st.download_button(
-                label="📝 Download Human-Readable Report",
-                data=report_md,
-                file_name=f"{cert_id}_report.md",
-                mime="text/markdown",
-                use_container_width=True
-            )
+    if fetch_error and not history_items:
+        st.warning(f"Could not load verification history: {fetch_error}")
+    elif not history_items:
+        st.info("No stored verification runs found. Verify claims in the **Verify Claims & Evidence** tab to start building an audit trail.")
+    else:
+        st.caption(f"Showing {len(history_items)} of {total_history_count} total stored runs.")
+        
+        for item in history_items:
+            is_verified = item.get("overall_status") == "VERIFIED"
+            status_badge = "🟢 VERIFIED" if is_verified else "🔴 REVIEW REQUIRED"
+            cert_id = item.get("certificate_id", "N/A")
+            created_at = item.get("created_at", "")[:19].replace("T", " ")
+            is_inspecting = (st.session_state.get("inspecting_history_id") == item["id"])
+            
+            with st.container():
+                c1, c2, c3, c4 = st.columns([2, 3, 2, 1])
+                with c1:
+                    if is_inspecting:
+                        st.markdown(f"**`{cert_id}`** <span style='color: #60a5fa; font-size: 0.75rem; font-weight: 700;'>[INSPECTING]</span>", unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"**`{cert_id}`**")
+                    st.caption(f"🕒 {created_at} UTC")
+                with c2:
+                    st.markdown(f"{status_badge}")
+                    c_det = item.get("conflicts_detected", 0)
+                    conflict_txt = f" • ⚠️ {c_det} conflict(s)" if c_det > 0 else ""
+                    st.caption(
+                        f"📊 **{item.get('claim_count', 0)}** Claims: "
+                        f"✅ {item.get('supported_count', 0)} "
+                        f"❌ {item.get('refuted_count', 0)} "
+                        f"⚠️ {item.get('unverified_count', 0)}"
+                        + conflict_txt
+                    )
+                with c3:
+                    draft_snip = item.get("draft_snippet") or ""
+                    if draft_snip:
+                        st.caption(f"\"{html.escape(draft_snip[:70])}...\"")
+                    else:
+                        st.caption(f"Sources: {item.get('total_sources', 0)} file(s)")
+                with c4:
+                    btn_label = "Inspect" if not is_inspecting else "🔍 Viewing"
+                    btn_type = "primary" if is_inspecting else "secondary"
+                    if st.button(btn_label, key=f"btn_load_{item['id']}", use_container_width=True, type=btn_type):
+                        loaded_cert = None
+                        # 1. Direct load_certificate (checks DB first, disk fallback)
+                        try:
+                            cert_obj = load_certificate(cert_id)
+                            if cert_obj:
+                                loaded_cert = cert_obj.model_dump()
+                        except Exception:
+                            pass
+                        
+                        # 2. Try backend API endpoint
+                        if not loaded_cert:
+                            try:
+                                cert_resp = requests.get(f"{BACKEND_URL}/certificate/{cert_id}", timeout=1.5)
+                                if cert_resp.status_code == 200:
+                                    loaded_cert = cert_resp.json()
+                            except Exception:
+                                pass
 
-        with st.expander("🔍 View Raw JSON Certificate"):
-            st.json(cert)
+                        # 3. Direct DB fallback if load_certificate had an issue
+                        if not loaded_cert and get_certificate_from_db:
+                            try:
+                                cert_obj = get_certificate_from_db(cert_id)
+                                if cert_obj:
+                                    loaded_cert = json.loads(cert_obj.model_dump_json())
+                            except Exception:
+                                pass
+
+                        if loaded_cert:
+                            st.session_state.history_inspected_cert = loaded_cert
+                            st.session_state.inspecting_history_id = item["id"]
+                            st.session_state.verification_result = loaded_cert
+                            st.session_state.selected_claim_id = (
+                                loaded_cert["claims"][0]["claim_id"]
+                                if loaded_cert.get("claims")
+                                else None
+                            )
+                            st.session_state["hist_selected_claim_id"] = st.session_state.selected_claim_id
+                            st.rerun()
+                        else:
+                            st.error(f"Unable to load certificate data for `{cert_id}`.")
+                st.divider()
 
 
-# TAB 2: EVALUATION DASHBOARD & BENCHMARKS
+# TAB 3: EVALUATION DASHBOARD & BENCHMARKS
 with tab_eval:
     st.markdown("### 📊 VERDICT Evaluation & Benchmark Suite")
     st.markdown("""

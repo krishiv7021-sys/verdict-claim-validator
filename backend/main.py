@@ -18,12 +18,22 @@ from backend.schemas import (
     VerifyResponse,
     HealthResponse,
     VerificationCertificate,
+    VerificationHistoryResponse,
+    VerificationHistoryItem,
     normalize_authority_level
 )
 from backend.services.verifier import VerificationPipeline
 from backend.services.certificate import (
+    load_certificate,
     load_certificate_from_disk,
     generate_human_readable_report
+)
+from backend.database.schema import init_db
+from backend.database.connection import check_db_health
+from backend.database.repository import (
+    get_verification,
+    list_verifications,
+    get_verification_count
 )
 from backend.utils.helpers import get_demo_package
 from backend.utils.security import (
@@ -39,16 +49,30 @@ from backend.utils.security import (
     validate_file_type_and_content,
     log_security_event
 )
+from contextlib import asynccontextmanager
 from backend.utils.rate_limiter import rate_limiter
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("verdict_api")
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initializes SQLite database and tables on startup."""
+    try:
+        init_db()
+        logger.info("VERDICT persistent SQLite storage initialized.")
+    except Exception as e:
+        logger.error(f"Failed to initialize SQLite storage: {e}")
+    yield
+
+
 app = FastAPI(
     title="VERDICT — Claim Verification & Evidence Analysis API",
     description="VERDICT is an evidence-grounded claim verification system that analyzes AI-generated content against trusted source documents, identifies supported, refuted, and unverified claims, and provides precise evidence for each verification decision.",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # Secure, environment-aware CORS configuration
@@ -91,6 +115,8 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
+
+
 # =====================================================================
 # API Endpoints
 # =====================================================================
@@ -104,6 +130,8 @@ def read_root():
         "endpoints": {
             "health": "/health",
             "verify": "POST /verify",
+            "verifications": "GET /verifications",
+            "verification_detail": "GET /verifications/{verification_id}",
             "certificate": "/certificate/{certificate_id}",
             "report": "/certificate/{certificate_id}/report",
             "demo": "/demo",
@@ -116,11 +144,13 @@ def read_root():
 def health_check():
     """Returns safe component health status without revealing keys or internal paths."""
     provider = os.getenv("LLM_PROVIDER", "heuristic_fallback")
+    db_ok = check_db_health()
     return HealthResponse(
-        status="healthy",
+        status="healthy" if db_ok else "degraded",
         version="1.0.0",
         embedding_model="BAAI/bge-small-en-v1.5",
         entailment_provider=provider,
+        database="connected" if db_ok else "unavailable",
         timestamp=datetime.now(timezone.utc).isoformat()
     )
 
@@ -149,6 +179,7 @@ def get_evaluation(fresh: bool = False):
 async def verify_claims_endpoint(
     request: Request,
     draft_text: Optional[str] = Form(None),
+    claims: Optional[str] = Form(None),
     draft_file: Optional[UploadFile] = File(None),
     source_files: List[UploadFile] = File(None),
     source_authorities: Optional[str] = Form(None)
@@ -156,6 +187,7 @@ async def verify_claims_endpoint(
     """
     Accepts:
     - AI-generated draft as text or uploaded TXT file
+    - Optional explicit claims list (JSON array string or newline-separated)
     - One or more source documents (PDF, DOCX, PPTX, XLSX, CSV, TXT, MD, JSON, HTML)
     - Optional source_authorities mapping (JSON string or dict)
     Applies:
@@ -176,8 +208,31 @@ async def verify_claims_endpoint(
         )
 
     try:
-        # 2. Resolve & Validate Draft Text
+        # 2. Resolve & Validate Draft Text and Claims
         resolved_draft = ""
+        parsed_claims: Optional[List[str]] = None
+
+        if claims is not None and claims.strip():
+            raw_claims = claims.strip()
+            # Try parsing as JSON or Python list
+            if (raw_claims.startswith("[") and raw_claims.endswith("]")) or raw_claims.startswith("claims ="):
+                clean_json = re.sub(r"^claims\s*=\s*", "", raw_claims).strip()
+                try:
+                    import json
+                    loaded = json.loads(clean_json)
+                    if isinstance(loaded, list):
+                        parsed_claims = [str(c).strip() for c in loaded if str(c).strip()]
+                except Exception:
+                    try:
+                        import ast
+                        loaded = ast.literal_eval(clean_json)
+                        if isinstance(loaded, list):
+                            parsed_claims = [str(c).strip() for c in loaded if str(c).strip()]
+                    except Exception:
+                        pass
+            if parsed_claims is None:
+                parsed_claims = [c.strip() for c in raw_claims.splitlines() if c.strip()]
+
         if draft_file is not None:
             # Enforce size limit on draft file
             d_bytes = await draft_file.read()
@@ -186,6 +241,8 @@ async def verify_claims_endpoint(
             resolved_draft = d_bytes.decode("utf-8", errors="replace")
         elif draft_text is not None and draft_text.strip():
             resolved_draft = draft_text.strip()
+        elif parsed_claims:
+            resolved_draft = "\n".join(parsed_claims)
 
         # Enforce maximum character limit on draft text
         if len(resolved_draft) > MAX_DRAFT_CHARS:
@@ -195,7 +252,7 @@ async def verify_claims_endpoint(
                 detail=f"AI draft exceeds the maximum allowed length ({MAX_DRAFT_CHARS:,} characters)."
             )
 
-        if not resolved_draft:
+        if not resolved_draft and not parsed_claims:
             # Handle empty draft gracefully without error
             pipeline_inst = VerificationPipeline()
             cert = pipeline_inst.run_verification(draft_text="", source_files=[])
@@ -286,6 +343,7 @@ async def verify_claims_endpoint(
         # 6. Run Verification Pipeline
         certificate = pipeline.run_verification(
             draft_text=resolved_draft,
+            claims=parsed_claims,
             source_files=files_to_process,
             source_authorities=parsed_authorities if parsed_authorities else None,
             top_k=3,
@@ -310,12 +368,12 @@ async def verify_claims_endpoint(
 
 @app.get("/certificate/{certificate_id}", response_model=VerificationCertificate)
 def get_certificate(certificate_id: str):
-    """Retrieves a previously generated JSON certificate from disk with path traversal protection."""
+    """Retrieves a previously generated JSON certificate from persistent storage or disk."""
     if not re.match(r'^[a-zA-Z0-9_-]{1,64}$', certificate_id):
         raise HTTPException(status_code=400, detail="Invalid certificate identifier.")
 
     try:
-        return load_certificate_from_disk(certificate_id)
+        return load_certificate(certificate_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Certificate '{certificate_id}' not found.")
     except Exception as e:
@@ -330,7 +388,7 @@ def get_certificate_report(certificate_id: str):
         raise HTTPException(status_code=400, detail="Invalid certificate identifier.")
 
     try:
-        cert = load_certificate_from_disk(certificate_id)
+        cert = load_certificate(certificate_id)
         return generate_human_readable_report(cert)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Certificate '{certificate_id}' not found.")
@@ -346,7 +404,49 @@ def export_certificate(certificate_id: str):
         raise HTTPException(status_code=400, detail="Invalid certificate identifier.")
 
     try:
-        cert = load_certificate_from_disk(certificate_id)
+        cert = load_certificate(certificate_id)
         return cert
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Certificate '{certificate_id}' not found.")
+
+
+@app.get("/verifications", response_model=VerificationHistoryResponse)
+def get_verifications_history(limit: int = 50, offset: int = 0):
+    """
+    Returns paginated list of historical verification runs from persistent storage.
+    """
+    try:
+        safe_limit = max(1, min(limit, 100))
+        safe_offset = max(0, offset)
+        items_data = list_verifications(limit=safe_limit, offset=safe_offset)
+        total = get_verification_count()
+        items = [VerificationHistoryItem(**item) for item in items_data]
+        return VerificationHistoryResponse(
+            total=total,
+            limit=safe_limit,
+            offset=safe_offset,
+            items=items
+        )
+    except Exception as e:
+        logger.error(f"Error retrieving verification history: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Unable to retrieve verification history.")
+
+
+@app.get("/verifications/{verification_id}")
+def get_verification_details(verification_id: str):
+    """
+    Retrieves complete stored verification record by verification_id or certificate_id.
+    """
+    if not re.match(r'^[a-zA-Z0-9_-]{1,64}$', verification_id):
+        raise HTTPException(status_code=400, detail="Invalid verification identifier.")
+
+    try:
+        record = get_verification(verification_id)
+        if not record:
+            raise HTTPException(status_code=404, detail=f"Verification record '{verification_id}' not found.")
+        return record
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving verification record {verification_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Unable to retrieve verification record.")

@@ -72,31 +72,65 @@ def retrieve_evidence_for_claims(
         # Sort primarily by ranking_score descending, secondarily by raw similarity
         scored_candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
 
+        # Filter chunks that meet the similarity threshold (or keep the top chunk if none meet threshold)
+        relevant_scored = [
+            item for item in scored_candidates
+            if item[1] >= similarity_threshold
+        ]
+        if not relevant_scored and scored_candidates:
+            relevant_scored = [scored_candidates[0]]
+
+        # Ensure multi-source diversity across distinct source files so that multiple uploaded
+        # documents with relevant evidence are represented in candidates rather than being crowded out.
+        sources_seen = set()
+        diverse_top_indices = []
+        for r_score, sim, idx in relevant_scored:
+            s_name = source_chunks[idx].filename
+            if s_name not in sources_seen:
+                sources_seen.add(s_name)
+                diverse_top_indices.append(idx)
+
+        # Build selected candidates: top chunk per relevant source document, then fill remaining slots
+        # up to top_k (or up to len(sources_seen) if multiple sources have relevant evidence)
+        selected_indices = list(diverse_top_indices)
+        if len(selected_indices) < top_k:
+            for r_score, sim, idx in relevant_scored:
+                if idx not in selected_indices:
+                    selected_indices.append(idx)
+                    if len(selected_indices) >= top_k:
+                        break
+
+        # Re-sort selected candidates by ranking_score descending, raw similarity descending
+        selected_candidates = [
+            (compute_ranking_score(float(scores[idx]), source_chunks[idx].authority_weight, enable_authority_weighting),
+             float(scores[idx]),
+             idx)
+            for idx in selected_indices
+        ]
+        selected_candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+
         candidates: List[EvidenceSpan] = []
-        for r_score, sim, idx in scored_candidates:
-            if sim >= similarity_threshold or len(candidates) == 0:
-                chunk = source_chunks[idx]
-                candidates.append(
-                    EvidenceSpan(
-                        source=chunk.filename,
-                        source_id=chunk.source_id,
-                        page=chunk.page,
-                        chunk_id=chunk.chunk_id,
-                        text=chunk.text,
-                        start_char=chunk.start_char,
-                        end_char=chunk.end_char,
-                        similarity=round(sim, 4),
-                        semantic_score=round(sim, 4),
-                        ranking_score=r_score,
-                        file_type=chunk.file_type,
-                        location_type=chunk.location_type,
-                        location=chunk.location,
-                        authority_level=chunk.authority_level,
-                        authority_weight=chunk.authority_weight
-                    )
+        for r_score, sim, idx in selected_candidates:
+            chunk = source_chunks[idx]
+            candidates.append(
+                EvidenceSpan(
+                    source=chunk.filename,
+                    source_id=chunk.source_id,
+                    page=chunk.page,
+                    chunk_id=chunk.chunk_id,
+                    text=chunk.text,
+                    start_char=chunk.start_char,
+                    end_char=chunk.end_char,
+                    similarity=round(sim, 4),
+                    semantic_score=round(sim, 4),
+                    ranking_score=r_score,
+                    file_type=chunk.file_type,
+                    location_type=chunk.location_type,
+                    location=chunk.location,
+                    authority_level=chunk.authority_level,
+                    authority_weight=chunk.authority_weight
                 )
-            if len(candidates) >= top_k:
-                break
+            )
 
         retrieval_map[claim.claim_id] = candidates
 

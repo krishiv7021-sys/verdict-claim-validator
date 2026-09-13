@@ -412,7 +412,9 @@ def test_frontend_history_inspection_interaction(temp_db, monkeypatch):
     save_verification(cert, draft_text="Filing deadline is 30 days.", db_path=temp_db)
     
     from streamlit.testing.v1 import AppTest
-    at = AppTest.from_file("frontend/app.py", default_timeout=15)
+    repo_root = Path(__file__).resolve().parent.parent
+    app_path = repo_root / "frontend" / "app.py"
+    at = AppTest.from_file(str(app_path), default_timeout=15)
     at.run()
     assert not at.exception
     

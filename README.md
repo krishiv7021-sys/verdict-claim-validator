@@ -451,6 +451,7 @@ curl -X POST "http://localhost:8000/verify" \
 │   └── app.py                   # Streamlit verification interface, history viewer, and evaluation dashboard
 ├── scripts/
 │   ├── demo_advanced_verification.py # Authority weighting and conflict demonstration
+│   ├── entrypoint.sh            # Production container entrypoint (FastAPI + Streamlit supervisor)
 │   ├── generate_all_demo_formats.py  # Generator for multi-format demo files
 │   ├── generate_sample_files.py      # Generator for sample PDF/TXT files
 │   ├── verify_demo_pipeline.py       # End-to-end verification verification script
@@ -471,8 +472,11 @@ curl -X POST "http://localhost:8000/verify" \
 │   ├── test_pipeline.py         # End-to-end pipeline and verdict logic tests
 │   ├── test_quantitative_verification.py # Numeric, duration, and boundary contradiction tests
 │   └── test_security.py         # 35 security, upload validation, and prompt injection tests
+├── .dockerignore                # Exclusions for container builds
 ├── .env.example                 # Template for environment configuration with security limits
 ├── .gitignore                   # Git exclusion rules for secrets, caches, and reports
+├── Dockerfile                   # Production container definition (Python 3.10-slim + BGE cache)
+├── render.yaml                  # Render Blueprint with persistent disk specification
 ├── requirements.txt             # Pinned project dependencies
 └── README.md                    # Project documentation
 ```
@@ -573,5 +577,58 @@ VERDICT utilizes GitHub Actions for continuous integration, automatically runnin
   - HuggingFace embeddings model cache (`BAAI/bge-small-en-v1.5`)
   - Execution of the full test suite using local deterministic fallbacks
   - Zero external API dependencies or hardcoded credentials
+
+---
+
+## Production Deployment
+
+VERDICT is packaged as a unified, production-ready container running internal FastAPI (`127.0.0.1:8000`) and the public Streamlit interface (`$PORT`) within a single service instance.
+
+### 1. Build the Docker Image
+```bash
+docker build -t verdict .
+```
+*(During build, BAAI/bge-small-en-v1.5 embeddings model weights are pre-cached for instant cold starts; build gracefully falls back to deterministic TF-IDF if offline).*
+
+### 2. Run with Persistent Storage
+To ensure SQLite verification history and certificates persist across container restarts, mount a persistent host volume to `/app/data`:
+
+```bash
+mkdir -p ./data/persistent-storage
+
+docker run -d \
+  --name verdict-app \
+  -p 8501:8501 \
+  -e PORT=8501 \
+  -e DATABASE_PATH=/app/data/verdict.db \
+  -e BACKEND_URL=http://127.0.0.1:8000 \
+  -e LLM_PROVIDER="" \
+  -v "$(pwd)/data/persistent-storage:/app/data" \
+  verdict
+```
+
+Access the application at `http://localhost:8501`.
+
+### 3. Environment Variables
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `PORT` | `8501` | Exposed web port (supplied dynamically by cloud hosting platforms). |
+| `BACKEND_URL` | `http://127.0.0.1:8000` | Loopback URL for internal communication between Streamlit and FastAPI. |
+| `DATABASE_PATH` | `/app/data/verdict.db` | Absolute path to SQLite storage on the persistent volume. |
+| `LLM_PROVIDER` | `""` | Optional LLM provider (`groq`, `openai`, `gemini`). Leave empty for offline heuristic NLI. |
+| `GROQ_API_KEY` | `""` | Optional API key for Groq Cloud inference (`llama-3.3-70b-versatile`). |
+| `OPENAI_API_KEY` | `""` | Optional API key for OpenAI inference (`gpt-4o-mini`). |
+| `GEMINI_API_KEY` | `""` | Optional API key for Google Gemini inference (`gemini-1.5-flash`). |
+| `ALLOWED_ORIGINS`| `*` | Allowed CORS origins for API callers. |
+
+### 4. Render Cloud Deployment
+VERDICT includes a minimal [Render Blueprint](render.yaml) (`render.yaml`) configured for Docker runtime:
+1. Connect the GitHub repository in the **Render Dashboard**.
+2. Render provisions a Web Service with a **1 GB Persistent Disk** mounted at `/app/data`.
+3. The platform-assigned `$PORT` is routed automatically to Streamlit, with container health checked via `/_stcore/health`.
+4. Configure any optional LLM API keys directly in the Render Environment Variables tab (never committed to git).
+*(Note: Render persistent disks require a Starter plan or higher).*
+
 
 

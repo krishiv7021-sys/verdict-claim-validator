@@ -1,0 +1,45 @@
+# Version control and IDE
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+.DS_Store
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Test caches and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local secrets and environment files
+.env
+.env.*
+.env.local
+!.env.example
+
+# Local SQLite databases and runtime locks
+data/*.db
+data/*.db-*
+*.sqlite*
+*.sqlite3*
+
+# Local generated certificates (keep directory placeholder)
+certificates/*.json
+!certificates/.gitkeep
+
+# Temporary data
+data/uploads/*
+!data/uploads/.gitkeep
+data/processed/*
+!data/processed/.gitkeep

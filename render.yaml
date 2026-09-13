@@ -1,0 +1,33 @@
+# =====================================================================
+# Render Deployment Blueprint: VERDICT
+# Unified Docker service: Internal FastAPI (127.0.0.1:8000) + Public Streamlit ($PORT)
+# =====================================================================
+
+services:
+  - type: web
+    name: verdict-claim-validator
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter # Persistent disks require Starter plan or higher on Render
+    region: oregon
+    healthCheckPath: /_stcore/health
+    disk:
+      name: verdict-data
+      mountPath: /app/data
+      sizeGB: 1
+    envVars:
+      - key: DATABASE_PATH
+        value: /app/data/verdict.db
+      - key: BACKEND_URL
+        value: http://127.0.0.1:8000
+      - key: LLM_PROVIDER
+        value: ""
+      - key: ALLOWED_ORIGINS
+        value: "*"
+      # Optional Entailment Provider API Keys (Configure securely in Render Dashboard)
+      # - key: GROQ_API_KEY
+      #   sync: false
+      # - key: OPENAI_API_KEY
+      #   sync: false
+      # - key: GEMINI_API_KEY
+      #   sync: false

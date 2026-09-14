@@ -36,8 +36,9 @@ RUN mkdir -p /app/data /app/certificates && \
 # Default environment configuration (overridable at container runtime)
 ENV PORT=8501 \
     PYTHONPATH=/app \
-    BACKEND_URL=http://127.0.0.1:8000 \
     DATABASE_PATH=/app/data/verdict.db \
+    TORCH_NUM_THREADS=1 \
+    OMP_NUM_THREADS=1 \
     LLM_PROVIDER=""
 
 # Streamlit port exposed externally

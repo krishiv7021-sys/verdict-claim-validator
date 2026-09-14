@@ -1,6 +1,6 @@
 # =====================================================================
-# Render Deployment Blueprint: VERDICT
-# Unified Docker service: Internal FastAPI (127.0.0.1:8000) + Public Streamlit ($PORT)
+# Render Deployment Blueprint: VERDICT (Render Free Tier)
+# Single-process Streamlit Service with In-Process Verification & TF-IDF Embeddings
 # =====================================================================
 
 services:
@@ -8,22 +8,23 @@ services:
     name: verdict-claim-validator
     runtime: docker
     dockerfilePath: ./Dockerfile
-    plan: starter # Persistent disks require Starter plan or higher on Render
+    plan: free
     region: oregon
+    branch: main
     healthCheckPath: /_stcore/health
-    disk:
-      name: verdict-data
-      mountPath: /app/data
-      sizeGB: 1
     envVars:
       - key: DATABASE_PATH
         value: /app/data/verdict.db
-      - key: BACKEND_URL
-        value: http://127.0.0.1:8000
+      - key: USE_TFIDF_EMBEDDINGS
+        value: "true"
       - key: LLM_PROVIDER
         value: ""
       - key: ALLOWED_ORIGINS
         value: "*"
+      - key: TORCH_NUM_THREADS
+        value: "1"
+      - key: OMP_NUM_THREADS
+        value: "1"
       # Optional Entailment Provider API Keys (Configure securely in Render Dashboard)
       # - key: GROQ_API_KEY
       #   sync: false

@@ -1,3 +1,4 @@
+import os
 import math
 import logging
 from typing import List, Union
@@ -5,13 +6,20 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Try to import sentence_transformers
-try:
-    from sentence_transformers import SentenceTransformer
-    HAS_SENTENCE_TRANSFORMERS = True
-except ImportError:
-    SentenceTransformer = None
-    HAS_SENTENCE_TRANSFORMERS = False
+# Check if lightweight / TF-IDF mode is explicitly enabled (e.g., Render Free tier)
+SentenceTransformer = None
+HAS_SENTENCE_TRANSFORMERS = False
+
+if os.getenv("USE_TFIDF_EMBEDDINGS", "").lower() in ("1", "true", "yes"):
+    logger.info("Lightweight embedding mode active (USE_TFIDF_EMBEDDINGS=true). Skipping sentence-transformers and PyTorch imports.")
+else:
+    # Try to import sentence_transformers
+    try:
+        from sentence_transformers import SentenceTransformer
+        HAS_SENTENCE_TRANSFORMERS = True
+    except ImportError:
+        SentenceTransformer = None
+        HAS_SENTENCE_TRANSFORMERS = False
 
 
 class FallbackTFIDFEmbedder:
